@@ -640,3 +640,52 @@ func TestTestJobIsNotInNetwatchSubtree(t *testing.T) {
 		t.Fatal("control: without TestJobPGID the job is part of netwatch's subtree")
 	}
 }
+
+// Claude Code started from a terminal (a tty shell ancestor, the usual
+// case) still has eligible tool groups: the tty subtree stops at Claude.
+// The terminal shell itself stays excluded. Same under tmux.
+func TestClaudeUnderTerminalOrTmuxKeepsToolGroups(t *testing.T) {
+	for _, parent := range []struct {
+		exe string
+		tty bool
+	}{{"/bin/zsh", true}, {"/opt/homebrew/bin/tmux", false}} {
+		w := &world{envs: map[int]map[string]string{}}
+		w.add(1, 0, 1, 1, "/sbin/launchd", 0, false)
+		w.add(90, 1, 90, 90, parent.exe, me, parent.tty)
+		w.add(100, 90, 100, 90, claudeExe, me, true)
+		w.toolShell(200)
+		w.add(201, 200, 200, 200, "/bin/sleep", me, false)
+		w.agentEnv(201, 100)
+		o := w.run(claudeVer)
+		if g := group(o, 200); g == nil || g.Tier != guard.TierTool {
+			t.Errorf("%s: tool group %+v, want TierTool", parent.exe, g)
+		}
+		if o.Excluded(w.proc(201), "/bin/sleep") {
+			t.Errorf("%s: tool shell child excluded", parent.exe)
+		}
+		if !o.Excluded(w.proc(90), parent.exe) || !o.Excluded(w.proc(100), claudeExe) {
+			t.Errorf("%s: the terminal and Claude itself must stay excluded", parent.exe)
+		}
+	}
+}
+
+// A test job under a terminal is still counted (the tty subtree does not
+// swallow it), while a sibling of the job stays excluded.
+func TestTestJobUnderTerminalIsCounted(t *testing.T) {
+	w := newWorld()
+	w.add(90, 1, 90, 90, "/bin/zsh", me, true)
+	w.add(9999, 90, 9999, 90, "/usr/local/bin/netwatch", me, true)
+	w.add(700, 9999, 700, 700, "/usr/bin/python3", me, false)
+	w.add(701, 700, 700, 700, "/usr/bin/python3", me, false)
+	w.add(800, 90, 800, 90, "/bin/sleep", me, false) // terminal's other child
+	o := Classify(Input{Procs: w.procs, SelfPID: 9999, UID: me, TestJobPGID: 700,
+		Env: func(int, ...string) map[string]string { return nil }})
+	for _, pid := range []int{700, 701} {
+		if o.Excluded(w.proc(pid), w.proc(pid).Exe) {
+			t.Errorf("test job member %d excluded", pid)
+		}
+	}
+	if !o.Excluded(w.proc(800), "/bin/sleep") {
+		t.Error("the terminal's other child must stay excluded")
+	}
+}

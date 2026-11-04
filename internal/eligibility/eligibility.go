@@ -53,8 +53,9 @@ type Input struct {
 	Budgets   []budget.Declared
 	SelfPID   int // netwatch itself; it and its children are excluded
 	// TestJobPGID is a test daemon's spawned job group (0: none). It is a
-	// child of netwatch but not part of netwatch's excluded subtree, so the
-	// job's footprint is counted; no other child of netwatch is affected.
+	// child of netwatch (and maybe of a terminal) but never part of an
+	// inherited excluded subtree, so the job's footprint is counted. Its
+	// own processes still get their own rules (tty, never-signal, uid).
 	TestJobPGID int
 	UID         int // our uid; other uids are excluded
 	// Resolver caches owner-app lookups (optional).
@@ -199,7 +200,13 @@ func (c *classifier) markExclusions() {
 				if seen[k] || k == 1 {
 					continue
 				}
-				if c.testJob(r.name, k) {
+				// A Claude Code process starts a new classification: its
+				// tool shells are judged by the Claude rules, not swallowed
+				// by a terminal, tmux or shell ancestor's subtree. (Claude
+				// started from a terminal has a tty ancestor; without this
+				// stop every tool shell would be excluded.) The test job is
+				// likewise never part of an inherited subtree.
+				if _, isClaude := c.claude[k]; isClaude || c.testJob(k) {
 					continue
 				}
 				seen[k] = true
@@ -212,10 +219,10 @@ func (c *classifier) markExclusions() {
 	}
 }
 
-// testJob reports whether pid is in the test daemon's job group, which
-// the netwatch subtree rule must not swallow.
-func (c *classifier) testJob(root string, pid int) bool {
-	if root != "netwatch" || c.in.TestJobPGID == 0 {
+// testJob reports whether pid is in the test daemon's job group, which no
+// inherited subtree rule (netwatch, tty, tmux) may swallow.
+func (c *classifier) testJob(pid int) bool {
+	if c.in.TestJobPGID == 0 {
 		return false
 	}
 	p, ok := c.procs[pid]
@@ -467,7 +474,7 @@ func (c *classifier) excludedFunc() func(p *resources.Proc, exe string) bool {
 			return true
 		}
 		// A new child of an excluded process is part of its subtree.
-		if rule[p.PPID] == "netwatch" && testPGID != 0 && p.PGID == testPGID {
+		if testPGID != 0 && p.PGID == testPGID {
 			return false
 		}
 		if s, ok := known[p.PPID]; ok {
