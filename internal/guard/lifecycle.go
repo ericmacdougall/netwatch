@@ -98,6 +98,16 @@ func (m *Machine) ResumeKey(key string, now time.Time, why string) []Action {
 	a := m.resumeAction(r, why)
 	delete(m.st.Groups, key)
 	m.st.LastResume[key] = now
+	if ep := m.st.Episode; ep != nil {
+		// The user overrode the guard for this group: hold it for the rest
+		// of the episode, or the next poll would pause it again (sticky,
+		// and in pause+kill mode on the way to a kill). A kill already in
+		// progress is cancelled the same way.
+		if ep.Held == nil {
+			ep.Held = map[string]bool{}
+		}
+		ep.Held[key] = true
+	}
 	m.dirty = true
 	return []Action{a}
 }

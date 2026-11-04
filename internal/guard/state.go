@@ -95,8 +95,12 @@ type Episode struct {
 	P1          map[string]bool   `json:"p1"`
 	Resumed     map[string]bool   `json:"resumed,omitempty"`
 	Unprotected map[string]bool   `json:"unprotected,omitempty"`
-	Pauses      int               `json:"pauses"`
-	Cleared     bool              `json:"cleared,omitempty"`
+	// Held are groups the user resumed by hand during this episode: the
+	// guard does not pause (and so never kills) them again until the
+	// episode ends. Alerts continue.
+	Held    map[string]bool `json:"held,omitempty"`
+	Pauses  int             `json:"pauses"`
+	Cleared bool            `json:"cleared,omitempty"`
 }
 
 // Tracker holds the poll-to-poll counters for path B and the fast path.

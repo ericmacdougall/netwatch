@@ -333,11 +333,14 @@ func (a *app) cmdResume(args []string) error {
 		fmt.Fprintf(a.stdout, "forced: leaving paused groups %v; stopped pids left behind: %v\n", rep.Live, rep.StoppedPIDs)
 		return nil
 	}
-	req, unlock := resumeRequests(a.logDir)
+	req, unlock, err := resumeRequests(a.logDir)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	rep, err := guard.ManualResumeLive(store, view, sig, time.Now(), pgid, *all, req)
 	if req != nil && err == nil && len(rep.Resumed) > 0 {
-		fmt.Fprintln(a.stdout, "the running daemon drops these records on its next poll")
+		fmt.Fprintln(a.stdout, "a running netwatch holds these records; it drops them on its next poll and will not pause these groups again until the danger episode ends")
 	}
 	if len(rep.Pruned) > 0 {
 		fmt.Fprintf(a.stdout, "pruned dead or reused groups: %v\n", rep.Pruned)
@@ -391,9 +394,12 @@ func validateResumeArgs(all, check, force bool, rest []string) (int, error) {
 func resumeAllForUninstall(logDir string) error {
 	_, stateFile, _ := statePaths(logDir)
 	view, sig := resumeDeps()
-	req, unlock := resumeRequests(logDir)
+	req, unlock, err := resumeRequests(logDir)
+	if err != nil {
+		return err
+	}
 	defer unlock()
-	_, err := guard.ManualResumeLive(&guard.FileStore{Path: stateFile}, view, sig, time.Now(), 0, true, req)
+	_, err = guard.ManualResumeLive(&guard.FileStore{Path: stateFile}, view, sig, time.Now(), 0, true, req)
 	if errors.Is(err, guard.ErrMissing) {
 		return nil
 	}
@@ -413,15 +419,24 @@ func (a *app) loadConfigOpts(testDaemon bool) *config.Config {
 	return &cfg
 }
 
+// errLockHeld means another netwatch holds a log directory's run lock.
+var errLockHeld = errors.New("another netwatch is already running")
+
 // resumeRequests decides how a manual resume reaches the guard state.
 // With the run lock free no daemon runs: the CLI holds the lock (so none
-// can start meanwhile) and updates the state file itself. Otherwise the
-// daemon owns the file, and the CLI files a request per group for it
-// (code-inspection F1: two writers lost each other's records).
-func resumeRequests(logDir string) (guard.ResumeRequests, func()) {
-	if unlock, err := lockRun(filepath.Join(logDir, "run.lock")); err == nil {
-		return nil, unlock
-	}
+// can start meanwhile), clears requests a stopped daemon never took, and
+// updates the state file itself. With the lock held, the daemon owns the
+// file and the CLI files a request per group for it (code-inspection F1:
+// two writers lost each other's records). Any other lock error fails.
+func resumeRequests(logDir string) (guard.ResumeRequests, func(), error) {
 	stateDir, _, _ := statePaths(logDir)
-	return guard.DirRequests{Dir: stateDir}, func() {}
+	unlock, err := lockRun(filepath.Join(logDir, "run.lock"))
+	switch {
+	case err == nil:
+		_ = guard.DirRequests{Dir: stateDir}.Clear()
+		return nil, unlock, nil
+	case errors.Is(err, errLockHeld):
+		return guard.DirRequests{Dir: stateDir}, func() {}, nil
+	}
+	return nil, nil, fmt.Errorf("resume: cannot check for a running daemon: %w", err)
 }

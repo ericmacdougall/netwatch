@@ -21,7 +21,7 @@ func lockRun(path string) (func(), error) {
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		f.Close()
-		return nil, fmt.Errorf("another netwatch is already running for %s", filepath.Dir(path))
+		return nil, fmt.Errorf("%w for %s", errLockHeld, filepath.Dir(path))
 	}
 	_ = f.Truncate(0)
 	fmt.Fprintf(f, "%d\n", os.Getpid())
