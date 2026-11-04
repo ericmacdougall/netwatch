@@ -82,6 +82,9 @@ func TestStickyRePauseWithinEpisode(t *testing.T) {
 	if r.rec(200) == nil {
 		t.Skip("both resumed before danger returned; the poll cadence changed")
 	}
+	r.m.mu.Lock()
+	r.m.st.LastResume = map[string]time.Time{} // as if the resume was long ago: the episode alone decides
+	r.m.mu.Unlock()
 	r.run(6, 2*time.Second, crit)
 	rc := r.rec(100)
 	must(t, rc != nil && rc.Sticky, "a re-pause in the same episode must be sticky: %+v", rc)
