@@ -72,15 +72,6 @@ func TestLinuxLiveSelf(t *testing.T) {
 	}
 }
 
-func contains(s []int, v int) bool {
-	for _, x := range s {
-		if x == v {
-			return true
-		}
-	}
-	return false
-}
-
 func TestLinuxFixtureRoot(t *testing.T) {
 	root := t.TempDir()
 	w := func(rel, body string) {
