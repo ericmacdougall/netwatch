@@ -158,6 +158,9 @@ func (s *State) init() {
 		if e.Unprotected == nil {
 			e.Unprotected = map[string]bool{}
 		}
+		if e.Held == nil {
+			e.Held = map[string]bool{}
+		}
 	}
 }
 
@@ -185,6 +188,7 @@ func (s State) Clone() State {
 		e.P1 = cloneB(s.Episode.P1)
 		e.Resumed = cloneB(s.Episode.Resumed)
 		e.Unprotected = cloneB(s.Episode.Unprotected)
+		e.Held = cloneB(s.Episode.Held)
 		c.Episode = &e
 	}
 	return c

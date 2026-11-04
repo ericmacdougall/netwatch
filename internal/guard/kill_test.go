@@ -413,3 +413,24 @@ func TestLiveMembersDropsNowExcludedRecordedPid(t *testing.T) {
 		t.Fatalf("live members %v: want 100, 102 (recorded, gone from the view), 103 (new); never 101", got)
 	}
 }
+
+// macOS: NoKill disables the kill stage in pause+kill mode, for a group
+// that is otherwise kill-eligible (the control above kills at +60s).
+func TestNoKillNeverKillsInPauseKillMode(t *testing.T) {
+	r := killRig(t, ModePauseKill)
+	r.m.cfg.NoKill = true
+	r.run(80, 2*time.Second, crit)
+	_, termed := r.termAt()
+	must(t, !termed && r.w.count(syscall.SIGTERM) == 0 && r.w.count(syscall.SIGKILL) == 0, "NoKill must never kill")
+	must(t, r.paused(100), "the group stays paused")
+}
+
+// Clone must not share the Held map: a save encodes the clone on another
+// goroutine while the loop may add a hold (code-inspection r3 F1).
+func TestCloneCopiesHeld(t *testing.T) {
+	st := State{Episode: &Episode{Held: map[string]bool{"pg:1:1": true}}}
+	st.init()
+	c := st.Clone()
+	st.Episode.Held["pg:2:2"] = true
+	must(t, c.Episode.Held["pg:1:1"] && !c.Episode.Held["pg:2:2"], "clone shares Held: %v", c.Episode.Held)
+}

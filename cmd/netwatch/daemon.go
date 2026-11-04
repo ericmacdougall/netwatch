@@ -193,7 +193,7 @@ func (a *app) startResources(ctx context.Context, d resourceDeps) (<-chan error,
 	errs := rateLimitedErrs(a.stderr)
 
 	mode, _ := effectiveMode(d.cfg, stateDir, runtime.GOOS)
-	gc := guardConfig(d.cfg, mode)
+	gc := daemonGuardConfig(d.cfg, mode, runtime.GOOS)
 	m := guard.NewMachine(gc)
 	sink := &resmon.Sink{Events: d.events, Guard: eventlog.NewWriter(filepath.Join(stateDir, "guard-events.jsonl"), max)}
 	var sig guard.Signaller = guard.OSSignaller{Starts: guard.ReaderStart{R: r}, Self: os.Getpid()}

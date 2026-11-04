@@ -45,6 +45,15 @@ func guardConfig(cfg *config.Config, mode guard.Mode) guard.Config {
 	return gc
 }
 
+// daemonGuardConfig is the daemon's machine configuration. On macOS the
+// kill stage is disabled outright, not only by the environment check:
+// the README and `guard status` promise it never kills there.
+func daemonGuardConfig(cfg *config.Config, mode guard.Mode, goos string) guard.Config {
+	gc := guardConfig(cfg, mode)
+	gc.NoKill = goos == "darwin"
+	return gc
+}
+
 // alertsConfig maps the early-warning thresholds.
 func alertsConfig(cfg *config.Config) alerts.Config {
 	return alerts.Config{
