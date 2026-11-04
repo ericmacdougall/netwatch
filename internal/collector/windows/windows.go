@@ -418,6 +418,22 @@ func (c *Collector) Ping(ctx context.Context, host string, count int) *health.Pi
 	return &p
 }
 
+// ExePath asks for the image path with limited query rights, which works
+// for the user's own processes without administrator rights.
+func (c *Collector) ExePath(pid int) string {
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		return ""
+	}
+	defer windows.CloseHandle(h)
+	buf := make([]uint16, windows.MAX_LONG_PATH)
+	n := uint32(len(buf))
+	if windows.QueryFullProcessImageName(h, 0, &buf[0], &n) != nil {
+		return ""
+	}
+	return windows.UTF16ToString(buf[:n])
+}
+
 // OrphanRule: Windows never reparents; see procscan.MissingParent.
 func (c *Collector) OrphanRule() procscan.OrphanRule { return procscan.MissingParent }
 

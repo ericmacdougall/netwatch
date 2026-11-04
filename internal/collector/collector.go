@@ -31,6 +31,10 @@ type Collector interface {
 	Gateway(ctx context.Context) (Gateway, error)
 	// Ping sends count echo requests; it never returns nil.
 	Ping(ctx context.Context, host string, count int) *health.Ping
+	// ExePath returns a process's executable path, or "" when it cannot be
+	// read (another user's process, or one that has exited). It is used
+	// only in memory, to tell apps apart.
+	ExePath(pid int) string
 	// OrphanRule is this platform's definition of "lost its parent".
 	OrphanRule() procscan.OrphanRule
 	// Terminate asks a verified process to exit. Unix sends SIGTERM only.

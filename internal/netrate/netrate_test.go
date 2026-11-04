@@ -71,7 +71,9 @@ func TestComputeInterfaceTotalsAndConnectionsOnly(t *testing.T) {
 func TestDetectorNewAppOncePerProcessAndFirstName(t *testing.T) {
 	boot := Key{"Safari", 1}
 	initial := snap(0, map[Key]Counter{boot: {}})
-	d := NewDetector(initial)
+	// Two different executables share the (truncated) name "zoom".
+	paths := map[Key]string{{"zoom", 3}: "/apps/zoom", {"zoom", 4}: "/opt/other/zoom"}
+	d := NewDetector(initial, func(k Key) string { return paths[k] })
 
 	slow, fast, fast2 := Key{"slow", 2}, Key{"zoom", 3}, Key{"zoom", 4}
 	cur := snap(10*time.Second, map[Key]Counter{
@@ -102,7 +104,7 @@ func TestDetectorNewAppOncePerProcessAndFirstName(t *testing.T) {
 }
 
 func TestDetectorConnectionsWhenNoBytes(t *testing.T) {
-	d := NewDetector(Snapshot{At: t0, Procs: map[Key]Counter{}})
+	d := NewDetector(Snapshot{At: t0, Procs: map[Key]Counter{}}, nil)
 	k := Key{"node.exe", 9}
 	cur := Snapshot{At: t0.Add(10 * time.Second), Procs: map[Key]Counter{k: {Conns: 2}}}
 	got := d.Observe(cur, Compute(Snapshot{At: t0}, cur), 50)
@@ -113,12 +115,63 @@ func TestDetectorConnectionsWhenNoBytes(t *testing.T) {
 
 func TestDetectorForgetsLongGoneProcesses(t *testing.T) {
 	k := Key{"a", 1}
-	d := NewDetector(snap(0, map[Key]Counter{k: {}}))
+	d := NewDetector(snap(0, map[Key]Counter{k: {}}), nil)
 	empty := snap(0, map[Key]Counter{})
 	for i := 0; i <= forgetAfter; i++ {
 		d.Observe(empty, Rates{}, 50)
 	}
 	if d.Known() != 0 {
 		t.Fatalf("process should be forgotten, still know %d", d.Known())
+	}
+}
+
+// A tool that runs over and over gets a new PID each time; it is one app.
+func TestDetectorReportsAnExecutableOnceAcrossPIDs(t *testing.T) {
+	exe := func(k Key) string {
+		if k.Name == "git" {
+			return "/usr/bin/git"
+		}
+		return ""
+	}
+	d := NewDetector(snap(0, map[Key]Counter{}), exe)
+	prev := snap(0, map[Key]Counter{})
+	events := 0
+	for i := 1; i <= 20; i++ {
+		// Each sample a fresh git PID moves traffic and the previous one is gone.
+		cur := snap(time.Duration(i)*10*time.Second, map[Key]Counter{{"git", 1000 + i}: {In: 100 * 1024}})
+		events += len(d.Observe(cur, Compute(prev, cur), 50))
+		prev = cur
+	}
+	if events != 1 {
+		t.Fatalf("20 runs of one executable gave %d NEW_NET_APP events, want 1", events)
+	}
+}
+
+// Without a readable path, apps are told apart by name.
+func TestDetectorFallsBackToNameWithoutPath(t *testing.T) {
+	d := NewDetector(snap(0, map[Key]Counter{}), func(Key) string { return "" })
+	cur := snap(10*time.Second, map[Key]Counter{{"curl", 7}: {In: 100 * 1024}, {"curl", 8}: {In: 100 * 1024}, {"ssh", 9}: {In: 100 * 1024}})
+	got := d.Observe(cur, Compute(snap(0, nil), cur), 50)
+	if len(got) != 2 {
+		t.Fatalf("want one curl and one ssh event, got %+v", got)
+	}
+}
+
+// An app that has been offline longer than the forget window is new again.
+func TestDetectorReportsAppAgainAfterForgetWindow(t *testing.T) {
+	exe := func(Key) string { return "/usr/bin/rsync" }
+	d := NewDetector(snap(0, map[Key]Counter{}), exe)
+	first := snap(10*time.Second, map[Key]Counter{{"rsync", 1}: {In: 100 * 1024}})
+	if got := d.Observe(first, Compute(snap(0, nil), first), 50); len(got) != 1 {
+		t.Fatalf("first run should be reported: %+v", got)
+	}
+	empty := snap(0, map[Key]Counter{})
+	for i := 0; i <= forgetAfter; i++ {
+		d.Observe(empty, Rates{}, 50)
+	}
+	again := snap(20*time.Second, map[Key]Counter{{"rsync", 2}: {In: 100 * 1024}})
+	got := d.Observe(again, Compute(snap(10*time.Second, nil), again), 50)
+	if len(got) != 1 || got[0].FirstName {
+		t.Fatalf("returning app should be reported once, not as a first-time name: %+v", got)
 	}
 }

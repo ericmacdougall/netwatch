@@ -80,3 +80,26 @@ func TestToastScriptParses(t *testing.T) {
 		t.Fatalf("toast script has %s parse errors", n)
 	}
 }
+
+func TestExePathOfSelf(t *testing.T) {
+	want, err := os.Executable()
+	if err != nil {
+		t.Skip(err)
+	}
+	if got := New().ExePath(os.Getpid()); !sameFile(t, got, want) {
+		t.Fatalf("ExePath(self) = %q, want %q", got, want)
+	}
+	if got := New().ExePath(1 << 30); got != "" {
+		t.Fatalf("ExePath of a missing PID = %q, want empty", got)
+	}
+}
+
+func sameFile(t *testing.T, a, b string) bool {
+	t.Helper()
+	if a == "" {
+		return false
+	}
+	sa, errA := os.Stat(a)
+	sb, errB := os.Stat(b)
+	return errA == nil && errB == nil && os.SameFile(sa, sb)
+}

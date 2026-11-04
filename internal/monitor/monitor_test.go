@@ -51,6 +51,7 @@ func (f *fakeCollector) Ping(_ context.Context, host string, _ int) *health.Ping
 	return &health.Ping{Avg: &v, Max: &v}
 }
 func (f *fakeCollector) OrphanRule() procscan.OrphanRule        { return procscan.InitParent }
+func (f *fakeCollector) ExePath(int) string                     { return "" }
 func (f *fakeCollector) Terminate(procscan.Process, bool) error { return nil }
 func (f *fakeCollector) Notify(string, string) error            { return nil }
 

@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -176,6 +177,15 @@ func (c *Collector) Ping(ctx context.Context, host string, count int) *health.Pi
 	out, _ := execx.Output(ctx, 15*time.Second, "ping", "-n", "-c", strconv.Itoa(count), "-i", "0.2", "-W", "2", "-w", "5", host)
 	p := health.ParsePingOutput(string(out), count)
 	return &p
+}
+
+// ExePath reads /proc/<pid>/exe, which works for the user's own processes.
+func (c *Collector) ExePath(pid int) string {
+	p, err := os.Readlink(filepath.Join(c.proc, strconv.Itoa(pid), "exe"))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSuffix(p, " (deleted)")
 }
 
 // OrphanRule: reparented to init or to a user-session subreaper.

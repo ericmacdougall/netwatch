@@ -3,6 +3,7 @@
 package darwin
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -72,6 +73,20 @@ func (c *Collector) Ping(ctx context.Context, host string, count int) *health.Pi
 	out, _ := execx.Output(ctx, 15*time.Second, "/sbin/ping", "-n", "-c", fmt.Sprint(count), "-i", "0.2", "-t", "4", host)
 	p := health.ParsePingOutput(string(out), count)
 	return &p
+}
+
+// ExePath reads the exec path from kern.procargs2, which works for the
+// user's own processes without spawning a helper.
+func (c *Collector) ExePath(pid int) string {
+	buf, err := unix.SysctlRaw("kern.procargs2", pid)
+	if err != nil || len(buf) <= 4 {
+		return ""
+	}
+	path := buf[4:] // after argc
+	if i := bytes.IndexByte(path, 0); i >= 0 {
+		path = path[:i]
+	}
+	return string(path)
 }
 
 // OrphanRule: macOS reparents orphans to launchd (pid 1).

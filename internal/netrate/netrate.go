@@ -111,38 +111,75 @@ type NewApp struct {
 }
 
 // forgetAfter bounds memory: a known process unseen for this many samples
-// is forgotten (it has exited or closed all sockets).
+// is forgotten (it has exited or closed all sockets). An app identity that
+// has not been online for this long is reported again when it returns.
 const forgetAfter = 360
 
-// maxNames caps the set of remembered process names.
+// maxNames caps the sets of remembered process names and app identities.
 const maxNames = 10000
 
-// Detector remembers which processes have already been seen online.
+// Identify returns a stable identity for a process, normally its
+// executable path, or "" when it cannot be read (another user's process,
+// or one that has already exited).
+type Identify func(Key) string
+
+type entry struct {
+	tick int    // last sample index the process was present
+	id   string // app identity, from Identify or the name
+}
+
+// Detector remembers which processes and apps have already been seen online.
+//
+// An app is identified by its executable, so a short-lived tool that runs
+// over and over (git, curl, a test worker) is reported once rather than
+// once per PID. The identity lives only in memory; events carry the name.
 type Detector struct {
-	known map[Key]int // key -> last sample index it was present
-	names map[string]bool
-	tick  int
+	known    map[Key]entry
+	ids      map[string]int // app identity -> last sample index it was present
+	names    map[string]bool
+	identify Identify
+	tick     int
 }
 
 // NewDetector seeds the detector with processes already running at
-// startup so they are not reported as new.
-func NewDetector(initial Snapshot) *Detector {
-	d := &Detector{known: map[Key]int{}, names: map[string]bool{}}
+// startup so they are not reported as new. identify may be nil, in which
+// case apps are told apart by name only.
+func NewDetector(initial Snapshot, identify Identify) *Detector {
+	d := &Detector{known: map[Key]entry{}, ids: map[string]int{}, names: map[string]bool{}, identify: identify}
 	for k := range initial.Procs {
-		d.known[k] = 0
+		id := d.idOf(k)
+		d.known[k] = entry{0, id}
+		d.remember(id, 0)
 		d.names[k.Name] = true
 	}
 	return d
 }
 
-// Observe records one sample and returns processes that came online:
-// unknown processes moving at least minKbps kilobits per second, or, when
-// the OS gives no byte counters, holding an established connection.
+func (d *Detector) idOf(k Key) string {
+	if d.identify != nil {
+		if p := d.identify(k); p != "" {
+			return "exe:" + p
+		}
+	}
+	return "name:" + k.Name
+}
+
+func (d *Detector) remember(id string, tick int) {
+	if _, ok := d.ids[id]; ok || len(d.ids) < maxNames {
+		d.ids[id] = tick
+	}
+}
+
+// Observe records one sample and returns apps that came online: unknown
+// processes moving at least minKbps kilobits per second, or, when the OS
+// gives no byte counters, holding an established connection, whose app
+// has not been online in the last forgetAfter samples.
 func (d *Detector) Observe(cur Snapshot, rates Rates, minKbps float64) []NewApp {
 	d.tick++
 	for k := range cur.Procs {
-		if _, ok := d.known[k]; ok {
-			d.known[k] = d.tick
+		if e, ok := d.known[k]; ok {
+			d.known[k] = entry{d.tick, e.id}
+			d.ids[e.id] = d.tick
 		}
 	}
 	var out []NewApp
@@ -157,16 +194,27 @@ func (d *Detector) Observe(cur Snapshot, rates Rates, minKbps float64) []NewApp 
 		if !online {
 			continue
 		}
-		d.known[r.Key] = d.tick
+		id := d.idOf(r.Key)
+		d.known[r.Key] = entry{d.tick, id}
+		last, seen := d.ids[id]
+		d.remember(id, d.tick)
+		if seen && d.tick-last <= forgetAfter {
+			continue // another instance of an app already online recently
+		}
 		first := !d.names[r.Name]
 		if first && len(d.names) < maxNames {
 			d.names[r.Name] = true
 		}
 		out = append(out, NewApp{Rate: r, FirstName: first})
 	}
-	for k, seen := range d.known {
-		if d.tick-seen > forgetAfter {
+	for k, e := range d.known {
+		if d.tick-e.tick > forgetAfter {
 			delete(d.known, k)
+		}
+	}
+	for id, seen := range d.ids {
+		if d.tick-seen > forgetAfter {
+			delete(d.ids, id)
 		}
 	}
 	return out
