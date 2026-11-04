@@ -128,13 +128,19 @@ func (s *Sampler) Sample() (Record, error) {
 	if err != nil {
 		return Record{}, err
 	}
+	return s.From(sys, procs, now), nil
+}
+
+// From builds a record from a reading and a scan the caller already has,
+// so the daemon does not read the process table twice.
+func (s *Sampler) From(sys resources.System, procs []resources.Proc, now time.Time) Record {
 	rec := Record{TS: now.UTC().Format(time.RFC3339), Sys: SysFrom(sys),
 		Pressure: sys.Pressure.String(), CompressorPct: CompressorPct(sys), SwapUsed: sys.SwapUsed}
 	rows, unread := s.rows(procs, now)
 	rec.Unread = unread
 	rec.TopMem = s.pick(rows, func(a, b *Row) bool { return a.Footprint > b.Footprint }, s.N)
 	rec.TopCPU = s.pick(rows, func(a, b *Row) bool { return a.CPUPct > b.CPUPct }, s.N)
-	return rec, nil
+	return rec
 }
 
 // CompressorPct is the compressor fill, the larger of the page and segment

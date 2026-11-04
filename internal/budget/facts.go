@@ -26,6 +26,16 @@ func NewReaderFacts(r resources.Reader) (*ReaderFacts, error) {
 	return &ReaderFacts{r: r, procs: m}, nil
 }
 
+// FactsFromProcs builds ReaderFacts from a scan the caller already has,
+// so the daemon does not read the process table twice per scan.
+func FactsFromProcs(r resources.Reader, ps []resources.Proc) *ReaderFacts {
+	m := make(map[int]resources.Proc, len(ps))
+	for _, p := range ps {
+		m[p.PID] = p
+	}
+	return &ReaderFacts{r: r, procs: m}
+}
+
 // Start implements Facts.
 func (f *ReaderFacts) Start(pid int) (time.Time, bool) {
 	p, ok := f.procs[pid]
