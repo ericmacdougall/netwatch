@@ -53,6 +53,9 @@ type Call struct {
 	// Programs are the normalized names of the executables the command
 	// invokes (see programs.go); derived, not the command itself.
 	Programs []string `json:"programs,omitempty"`
+	// ArgNames are the normalized names of standalone arguments (weak
+	// matches, see ArgNames).
+	ArgNames []string `json:"arg_names,omitempty"`
 }
 
 // Config bounds one scan.
@@ -155,7 +158,7 @@ func ParseLine(line []byte) []Call {
 		}
 		out = append(out, Call{At: at.UTC(), SessionID: strings.ToLower(l.SessionID), AgentID: agent, ToolUseID: safeID(it.ID),
 			Redacted: Redact(it.Input.Command), SHA256: Hash(it.Input.Command), Len: len(it.Input.Command),
-			Programs: Programs(it.Input.Command)})
+			Programs: Programs(it.Input.Command), ArgNames: ArgNames(it.Input.Command)})
 	}
 	return out
 }
