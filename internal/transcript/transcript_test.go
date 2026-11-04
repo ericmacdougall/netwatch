@@ -253,3 +253,29 @@ func FuzzPrograms(f *testing.F) {
 		}
 	})
 }
+
+func TestArgNames(t *testing.T) {
+	cases := map[string][]string{
+		`perl -e 'alarm 150; exec @ARGV' python3 io.py`: {"python", "io.py"},
+		"xargs python3":                     {"python"},
+		"timeout 5 python3 job.py":          {"job.py"}, // python3 is the program (strong), not an argument
+		`echo "python3 is great" 'python3'`: nil,
+		"ls /usr/bin/Python3.12":            {"python"},
+		"FOO=1 xargs -n1 -P4 python3.11 -u": {"python"},
+		"bash -c 'xargs python3'":           {"python"},
+		"cmd $HOME python3\\ x":             nil, // $-words and escaped-space words are not standalone names
+	}
+	for in, want := range cases {
+		got := ArgNames(in)
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Errorf("%q: got %v want %v", in, got, want)
+		}
+	}
+	if n := len(ArgNames(strings.Repeat("x a1 b2 c3 d4 e5 f6; ", 200))); n > 48 {
+		t.Errorf("not bounded: %d", n)
+	}
+	cs := ParseLine([]byte(line("2026-11-04T16:06:32Z", sess, "", "Bash", "xargs python3")))
+	if len(cs) != 1 || strings.Join(cs[0].ArgNames, ",") != "python" || strings.Join(cs[0].Programs, ",") != "xargs" {
+		t.Errorf("ParseLine: %+v", cs)
+	}
+}
