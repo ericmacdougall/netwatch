@@ -93,13 +93,6 @@ type Deps struct {
 	TestTarget            *TestTarget   // test daemon only
 }
 
-// TestTarget limits the guard to one process group. Every other group is
-// demoted to alert-only before the machine sees it.
-type TestTarget struct {
-	PGID  int
-	Start time.Time
-}
-
 // Loop is the running daemon state. Use New, then Run.
 type Loop struct {
 	d    Deps
@@ -277,6 +270,9 @@ func (l *Loop) scan(now time.Time, sys resources.System) {
 	var cls Classification
 	if ok {
 		cls = l.d.Classifier.Classify(procs, recs, budgets)
+		if l.d.TestTarget != nil {
+			cls.Groups = withTarget(cls.Groups, *l.d.TestTarget)
+		}
 		if l.d.Watcher != nil {
 			l.d.Watcher.Watch(cls.Claude)
 		}

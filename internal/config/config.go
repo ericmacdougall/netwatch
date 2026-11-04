@@ -13,8 +13,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
-	"strings"
 )
 
 // EnvConfig names the environment variable that overrides the config path.
@@ -47,22 +45,20 @@ type Config struct {
 	OrphanIgnoreExtra  []string `json:"orphan_ignore_extra"`  // appended to orphan_ignore
 
 	// Resource guard (GoodQA work-tracker-automatic#35742).
-	GuardMode            string   `json:"guard_mode"`               // "" = platform default
-	GuardClaudeVersions  []string `json:"guard_claude_versions"`    // extra Claude versions kill may apply to
-	GuardNeverSignal     []string `json:"guard_never_signal"`       // nil = built-in list
-	GuardMinShare        float64  `json:"guard_min_share"`          // fraction of RAM, 0.05-1.0
-	GuardGroupRAMFrac    float64  `json:"guard_group_ram_fraction"` // D4 size, 0.25-1.5
-	GuardHeadroomFrac    float64  `json:"guard_headroom_frac"`      // P1 corroboration, 0.02-0.95
-	GuardP1HorizonS      int      `json:"guard_p1_horizon_s"`       // 5-120
-	RunCappedPaths       []string `json:"run_capped_paths"`         // empty = no sidecar is honoured
-	AlertProcGB          float64  `json:"alert_proc_gb"`
-	AlertGrowthGBPerMin  float64  `json:"alert_growth_gb_per_min"`
-	AlertSwapGB          float64  `json:"alert_swap_gb"`
-	AlertChromeHelpers   int      `json:"alert_chrome_helpers"`
-	ResourcesEveryS      int      `json:"resources_every_s"`
-	HotAlways            bool     `json:"hot_always"`             // test daemon only
-	GuardTestTarget      string   `json:"guard_test_target"`      // test daemon only: PGID@START_UNIX_NANOS
-	GuardTestCorroborate bool     `json:"guard_test_corroborate"` // test daemon only
+	GuardMode           string   `json:"guard_mode"`               // "" = platform default
+	GuardClaudeVersions []string `json:"guard_claude_versions"`    // extra Claude versions kill may apply to
+	GuardNeverSignal    []string `json:"guard_never_signal"`       // nil = built-in list
+	GuardMinShare       float64  `json:"guard_min_share"`          // fraction of RAM, 0.05-1.0
+	GuardGroupRAMFrac   float64  `json:"guard_group_ram_fraction"` // D4 size, 0.25-1.5
+	GuardHeadroomFrac   float64  `json:"guard_headroom_frac"`      // P1 corroboration, 0.02-0.95
+	GuardP1HorizonS     int      `json:"guard_p1_horizon_s"`       // 5-120
+	RunCappedPaths      []string `json:"run_capped_paths"`         // empty = no sidecar is honoured
+	AlertProcGB         float64  `json:"alert_proc_gb"`
+	AlertGrowthGBPerMin float64  `json:"alert_growth_gb_per_min"`
+	AlertSwapGB         float64  `json:"alert_swap_gb"`
+	AlertChromeHelpers  int      `json:"alert_chrome_helpers"`
+	ResourcesEveryS     int      `json:"resources_every_s"`
+	HotAlways           bool     `json:"hot_always"` // test daemon only
 
 	// Compiled forms, filled by Compile.
 	Watch  []*regexp.Regexp `json:"-"`
@@ -160,8 +156,9 @@ func Load(path string) (Config, []string, error) { return LoadOpts(path, Options
 
 // Options changes how a config is read.
 type Options struct {
-	// TestDaemon honours hot_always, guard_test_target and
-	// guard_test_corroborate. Without it they are ignored with a warning.
+	// TestDaemon honours hot_always. Without it the key is ignored with a
+	// warning. (The test daemon's target is the job it spawns itself, never
+	// a config value.)
 	TestDaemon bool
 }
 
@@ -318,46 +315,11 @@ func (c *Config) validateGuard() []string {
 
 // testOnly drops the test-daemon keys unless the daemon is a test daemon.
 func (c *Config) testOnly(opt Options) []string {
-	var w []string
-	if opt.TestDaemon {
-		if c.GuardTestTarget != "" {
-			if _, _, err := ParseTestTarget(c.GuardTestTarget); err != nil {
-				w = append(w, fmt.Sprintf("config: guard_test_target %q ignored: %v", c.GuardTestTarget, err))
-				c.GuardTestTarget = ""
-			}
-		}
-		return w
+	if opt.TestDaemon || !c.HotAlways {
+		return nil
 	}
-	if c.HotAlways {
-		w = append(w, "config: hot_always is only honoured with --test-daemon; ignored")
-		c.HotAlways = false
-	}
-	if c.GuardTestTarget != "" {
-		w = append(w, "config: guard_test_target is only honoured with --test-daemon; ignored")
-		c.GuardTestTarget = ""
-	}
-	if c.GuardTestCorroborate {
-		w = append(w, "config: guard_test_corroborate is only honoured with --test-daemon; ignored")
-		c.GuardTestCorroborate = false
-	}
-	return w
-}
-
-// ParseTestTarget parses "PGID@START_UNIX_NANOS".
-func ParseTestTarget(s string) (pgid int, startNanos int64, err error) {
-	a, b, ok := strings.Cut(s, "@")
-	if !ok {
-		return 0, 0, errors.New("want PGID@START_UNIX_NANOS")
-	}
-	p, err := strconv.Atoi(a)
-	if err != nil || p <= 1 {
-		return 0, 0, errors.New("bad pgid")
-	}
-	n, err := strconv.ParseInt(b, 10, 64)
-	if err != nil || n <= 0 {
-		return 0, 0, errors.New("bad start time")
-	}
-	return p, n, nil
+	c.HotAlways = false
+	return []string{"config: hot_always is only honoured with --test-daemon; ignored"}
 }
 
 // Compile turns the pattern strings into regexps; invalid patterns are

@@ -58,35 +58,20 @@ func TestGuardBoundsAreClampedWithAWarning(t *testing.T) {
 }
 
 func TestTestOnlyKeysIgnoredWithoutTestDaemon(t *testing.T) {
-	js := []byte(`{"hot_always":true,"guard_test_target":"4242@1762000000000000000","guard_test_corroborate":true}`)
+	js := []byte(`{"hot_always":true}`)
 	cfg, w, err := Parse(js)
-	if err != nil || cfg.HotAlways || cfg.GuardTestTarget != "" || cfg.GuardTestCorroborate {
-		t.Fatalf("a normal daemon must ignore the test keys: %v %+v", err, cfg)
+	if err != nil || cfg.HotAlways || len(w) != 1 {
+		t.Fatalf("a normal daemon must ignore hot_always with a warning: %v %v %+v", err, w, cfg)
 	}
-	if len(w) != 3 {
-		t.Fatalf("want a warning per ignored key, got %v", w)
-	}
-	// Control: a test daemon honours them.
+	// Control: a test daemon honours it.
 	cfg, w, err = ParseOpts(js, Options{TestDaemon: true})
-	if err != nil || !cfg.HotAlways || cfg.GuardTestTarget == "" || !cfg.GuardTestCorroborate || len(w) != 0 {
-		t.Fatalf("test daemon must honour the keys: %v %v %+v", err, w, cfg)
+	if err != nil || !cfg.HotAlways || len(w) != 0 {
+		t.Fatalf("test daemon must honour hot_always: %v %v %+v", err, w, cfg)
 	}
-	// A malformed target is dropped with a warning even in a test daemon.
-	cfg, w, _ = ParseOpts([]byte(`{"guard_test_target":"nope"}`), Options{TestDaemon: true})
-	if cfg.GuardTestTarget != "" || len(w) != 1 {
-		t.Fatalf("bad target: %v %+v", w, cfg)
-	}
-}
-
-func TestParseTestTarget(t *testing.T) {
-	p, n, err := ParseTestTarget("4242@1762000000000000000")
-	if err != nil || p != 4242 || n != 1762000000000000000 {
-		t.Fatalf("%v %v %v", p, n, err)
-	}
-	for _, bad := range []string{"", "4242", "@5", "1@5", "x@5", "4242@0", "4242@x"} {
-		if _, _, err := ParseTestTarget(bad); err == nil {
-			t.Errorf("%q must be rejected", bad)
-		}
+	// The removed target keys are unknown: a config can never aim the guard.
+	_, w, _ = ParseOpts([]byte(`{"guard_test_target":"4242@1"}`), Options{TestDaemon: true})
+	if len(w) != 1 || !strings.Contains(w[0], "unknown key") {
+		t.Fatalf("guard_test_target must be an unknown key: %v", w)
 	}
 }
 
