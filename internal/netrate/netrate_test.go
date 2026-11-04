@@ -284,3 +284,21 @@ func TestProgramArg(t *testing.T) {
 		t.Errorf("long program not truncated: %d bytes", len(got))
 	}
 }
+
+// The same script name under different runtimes is two apps.
+func TestDetectorProgramKeyIncludesRuntime(t *testing.T) {
+	id := Identify{
+		Exe: func(pid int) string {
+			if pid == 1 {
+				return "/usr/bin/python3"
+			}
+			return "/usr/bin/node"
+		},
+		Args: func(pid int) []string { return []string{"x", "main.js"} },
+	}
+	d := NewDetector(snap(0, map[Key]Counter{}), id)
+	cur := snap(10*time.Second, map[Key]Counter{{"python3", 1}: {In: 100 * 1024}, {"node", 2}: {In: 100 * 1024}})
+	if got := d.Observe(cur, Compute(snap(0, nil), cur), 50); len(got) != 2 {
+		t.Fatalf("python and node running main.js are different apps: %+v", got)
+	}
+}

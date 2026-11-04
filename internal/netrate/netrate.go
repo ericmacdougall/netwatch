@@ -231,6 +231,7 @@ var interpreters = map[string]bool{
 	"java": true, "javaw": true, "dotnet": true, "ruby": true, "perl": true, "php": true,
 	"sh": true, "bash": true, "zsh": true, "dash": true, "fish": true, "busybox": true, "env": true,
 	"pwsh": true, "powershell": true, "cmd": true, "wscript": true, "cscript": true, "osascript": true,
+	"pypy": true, "lua": true, "rscript": true, "julia": true, "tclsh": true, "uv": true,
 }
 
 // isInterpreter reports whether a path or process name is a known runtime,
