@@ -222,11 +222,13 @@ func TestKillCausationShareProng(t *testing.T) {
 }
 
 func TestKillCausationFloorAndDenominator(t *testing.T) {
-	// Below the min share floor (1.6 GiB at 0.1): share 100% but no kill.
-	f := shareRig(t, 300<<20, 1200<<20, 0, 0.1)
+	// Below the min share floor (4 GiB at 0.25): paused (it grew 2 GB since
+	// danger) with share 100%, but no kill at 3.5 GiB.
+	f := shareRig(t, 512<<20, 3*gib, 0, 0.25)
+	must(t, f.paused(100), "setup: the group is paused")
 	must(t, !killed(f), "below the floor must not kill (footprint %d)", f.groups[100].fp)
-	// Control: floor lowered to 0.05 (0.8 GiB) kills.
-	c := shareRig(t, 300<<20, 1200<<20, 0, 0.05)
+	// Control: floor lowered to 0.2 (3.2 GiB) kills.
+	c := shareRig(t, 512<<20, 3*gib, 0, 0.2)
 	must(t, killed(c), "control: above a lower floor the same series kills")
 
 	// NEG-17: a 0.6 GB rise has a denominator under 1 GB.

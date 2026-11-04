@@ -94,6 +94,20 @@ func TestStopOrderLeaderFirstThenTopDown(t *testing.T) {
 	}
 	got := r.w.sigs(syscall.SIGSTOP)
 	want := []int{100, 110, 120, 111}
+	// A leader whose pid is higher than its children's (pid wrap) still
+	// goes first.
+	w := newRig(t, ModePause)
+	w.tool(500, 10*gib)
+	w.w.add(110, 500, 500, t0)
+	w.w.add(120, 500, 500, t0)
+	w.run(3, 2*time.Second, normal)
+	for i := 0; i < 3; i++ {
+		w.grow(500, gib)
+		w.poll(2*time.Second, warn)
+	}
+	if g := w.w.sigs(syscall.SIGSTOP); len(g) != 3 || g[0] != 500 {
+		t.Fatalf("leader must be stopped first, got %v", g)
+	}
 	must(t, len(got) == len(want), "stops %v", got)
 	for i := range want {
 		must(t, got[i] == want[i], "stop order %v, want %v", got, want)
@@ -216,6 +230,10 @@ func TestExcludedMembersAndSubtreeNeverSignalled(t *testing.T) {
 		must(t, l.pid != 102 && l.pid != 103, "excluded pid %d signalled with %v", l.pid, l.sig)
 	}
 	must(t, r.w.procs[101].stopped && !r.w.procs[102].stopped && !r.w.procs[103].stopped, "wrong stop set")
+	r.run(10, 2*time.Second, warn)
+	for _, a := range r.acts {
+		must(t, !(a.Kind == ActAlert && contains2(a.Reason, "unstable")), "running excluded members must not count as an unstable subtree")
+	}
 }
 
 func TestOffAndAlertModesNeverSignal(t *testing.T) {
