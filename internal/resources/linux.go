@@ -133,9 +133,13 @@ func (r *linuxReader) System() (System, error) {
 	if b, err := r.read(r.root+"/pressure/memory", 4096); err == nil {
 		if _, full, ok := ParsePSI(b); ok {
 			s.PSIFullAvg10 = full
-			s.Pressure = PSILevel(full)
+			s.Pressure = LinuxLevel(full, s.MemAvailable, s.RAM)
 		}
-	} // no PSI (old kernel or disabled): Pressure stays LevelUnknown
+	} else if m.Total > 0 && float64(m.Available) < MemAvailFloor*float64(m.Total) {
+		// No PSI (old kernel or disabled): the MemAvailable floor still
+		// counts; otherwise Pressure stays LevelUnknown.
+		s.Pressure = LevelCritical
+	}
 	if b, err := r.read(r.root+"/loadavg", 256); err == nil {
 		for i, c := range b {
 			if c == ' ' {

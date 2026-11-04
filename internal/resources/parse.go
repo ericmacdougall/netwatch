@@ -196,15 +196,28 @@ func kbValue(b []byte) (uint64, bool) {
 //   - warn at full avg10 >= 1.0: a sustained 1% of wall time with the whole
 //     system stalled is abnormal on a healthy host (the idle value on the
 //     reference machine is near 0.03) yet still well short of thrashing.
-//   - critical at full avg10 >= 10.0: a tenth of wall time with no task
-//     making progress is thrashing; systemd-oomd and oomd use similar
-//     orders of magnitude before acting.
+//   - critical at full avg10 >= 20.0 (spec v11): a fifth of wall time with
+//     no task making progress is thrashing; systemd-oomd and oomd act at
+//     similar orders of magnitude.
 //
+// LinuxLevel also treats MemAvailable under 3% of RAM as critical.
 // They are variables so a test or a future config key can adjust them.
 var (
 	PSIWarn     = 1.0
-	PSICritical = 10.0
+	PSICritical = 20.0
+	// MemAvailFloor is the MemAvailable fraction of RAM below which the
+	// host counts as critical even before PSI rises.
+	MemAvailFloor = 0.03
 )
+
+// LinuxLevel is PSILevel raised to critical when MemAvailable is under
+// MemAvailFloor of RAM. An unknown total (0) never reads as critical.
+func LinuxLevel(full float64, avail, total uint64) Level {
+	if total > 0 && float64(avail) < MemAvailFloor*float64(total) {
+		return LevelCritical
+	}
+	return PSILevel(full)
+}
 
 // ParsePSI returns the "some" and "full" avg10 values.
 func ParsePSI(b []byte) (some, full float64, ok bool) {
