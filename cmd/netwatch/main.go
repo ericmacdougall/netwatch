@@ -306,7 +306,8 @@ func (a *app) cmdReport(args []string) error {
 	if err != nil {
 		return err
 	}
-	r := report.Build(*since, from, samples, events)
+	resRecs, guardEvs := report.ReadResources(filepath.Join(a.logDir, "resources.jsonl"), evPath, from)
+	r := report.Build(*since, from, samples, events).WithResources(resRecs, guardEvs)
 	if *asJSON {
 		enc := json.NewEncoder(a.stdout)
 		enc.SetIndent("", "  ")
