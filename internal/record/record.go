@@ -22,7 +22,7 @@ const (
 	Runaway       = "RUNAWAY"
 	OrphansKilled = "ORPHANS_KILLED"
 
-	// Resource and guard events (GoodQA work-tracker-automatic#35742).
+	// Resource and guard events.
 	ResourceAlert         = "RESOURCE_ALERT"
 	GuardPause            = "GUARD_PAUSE"
 	GuardResume           = "GUARD_RESUME"

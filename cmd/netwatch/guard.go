@@ -322,18 +322,35 @@ func liveChildren(rd resources.Full, v string) []shapecheck.Child {
 	return out
 }
 
-// cmdResume handles resume PGID|--all [--force] and the rollback gate
-// resume --all --check [--force].
+// cmdResume handles resume PGID|--all, resume --pid PID (one stopped
+// process of your own, for when the guard state is unusable) and the
+// rollback gate resume --all --check [--force].
 func (a *app) cmdResume(args []string) error {
 	fs := a.flags("resume")
 	all := fs.Bool("all", false, "resume every group netwatch paused")
 	check := fs.Bool("check", false, "rollback gate: refuse while live paused groups remain (needs --all)")
 	force := fs.Bool("force", false, "with --check: proceed anyway and list the stopped pids left behind")
+	onePID := fs.Int("pid", 0, "resume one stopped process of yours (when the guard state is unusable)")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return err
 		}
 		return usageError{err}
+	}
+	if *onePID != 0 {
+		if *all || *check || *force || len(fs.Args()) > 0 {
+			return usageError{errors.New("--pid takes no other arguments")}
+		}
+		if *onePID <= 1 {
+			return usageError{fmt.Errorf("bad pid %d (want a number above 1)", *onePID)}
+		}
+		_, stateFile, _ := statePaths(a.logDir)
+		view, sig := resumeDeps()
+		if err := guard.ResumePID(&guard.FileStore{Path: stateFile}, view, sig, *onePID, os.Getuid()); err != nil {
+			return err
+		}
+		fmt.Fprintf(a.stdout, "resumed pid %d\n", *onePID)
+		return nil
 	}
 	pgid, err := validateResumeArgs(*all, *check, *force, fs.Args())
 	if err != nil {
@@ -343,12 +360,16 @@ func (a *app) cmdResume(args []string) error {
 	store := &guard.FileStore{Path: stateFile}
 	view, sig := resumeDeps()
 	if *check {
-		rep, err := guard.RollbackGate(store, view, *force)
+		rep, err := guard.RollbackGate(store, view, os.Getuid(), *force)
 		if err != nil {
 			if errors.Is(err, guard.ErrPausedRemain) {
 				fmt.Fprintf(a.stdout, "live paused groups remain: %v\n", rep.Live)
 			}
 			return err
+		}
+		if rep.Unusable != nil {
+			fmt.Fprintf(a.stdout, "forced: guard state unusable (%v); stopped processes of yours: %v; resume one netwatch stopped with: netwatch resume --pid PID\n", rep.Unusable, rep.StoppedPIDs)
+			return nil
 		}
 		if len(rep.Live) == 0 {
 			fmt.Fprintln(a.stdout, "no live paused groups: safe to swap the binary")

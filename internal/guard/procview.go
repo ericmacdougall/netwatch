@@ -8,9 +8,9 @@ import (
 
 // ProcInfo is one live process as the executor and resume logic see it.
 type ProcInfo struct {
-	PID, PGID, SID int
-	Start          time.Time
-	Stopped        bool
+	PID, PGID, SID, UID int
+	Start               time.Time
+	Stopped             bool
 }
 
 // ProcView lets recovery and resume re-enumerate processes.
@@ -34,7 +34,7 @@ func (v ReaderView) all() ([]ProcInfo, error) {
 	}
 	out := make([]ProcInfo, 0, len(ps))
 	for _, p := range ps {
-		out = append(out, ProcInfo{PID: p.PID, PGID: p.PGID, SID: p.SID, Start: p.Start, Stopped: p.Stopped})
+		out = append(out, ProcInfo{PID: p.PID, PGID: p.PGID, SID: p.SID, UID: p.UID, Start: p.Start, Stopped: p.Stopped})
 	}
 	return out, nil
 }

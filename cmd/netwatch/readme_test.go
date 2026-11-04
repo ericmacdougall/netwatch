@@ -20,6 +20,7 @@ func TestReadmeDocumentsTheGuard(t *testing.T) {
 		"netwatch guard alert",
 		"**Rollback.**",
 		"netwatch resume --all",
+		"netwatch resume --pid PID",
 		"Codex and other agent harnesses get alerts only",
 		"Wall-clock timer warning",
 		"prevents the host reset",

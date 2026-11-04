@@ -44,7 +44,7 @@ type Config struct {
 	WatchPatternsExtra []string `json:"watch_patterns_extra"` // appended to watch_patterns
 	OrphanIgnoreExtra  []string `json:"orphan_ignore_extra"`  // appended to orphan_ignore
 
-	// Resource guard (GoodQA work-tracker-automatic#35742).
+	// Resource guard.
 	GuardMode           string   `json:"guard_mode"`               // "" = platform default
 	GuardClaudeVersions []string `json:"guard_claude_versions"`    // extra Claude versions kill may apply to
 	GuardNeverSignal    []string `json:"guard_never_signal"`       // added to the built-in list

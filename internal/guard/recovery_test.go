@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ericmacdougall/netwatch/internal/danger"
+	"github.com/ericmacdougall/netwatch/internal/record"
 )
 
 // restart simulates a daemon restart: a new machine, detector and executor
@@ -216,11 +217,18 @@ func TestMissingOrCorruptStateFailsClosedWithLoudAlert(t *testing.T) {
 	must(t, errors.Is(rep.Err, ErrCorrupt) && rep.FailedOK && len(rep.Stopped) == 1, "corrupt: %+v", rep)
 	must(t, len(e.M.RecordKeys()) == 0, "nothing may be adopted")
 	must(t, len(nt.msgs) == 1 && contains2(nt.msgs[0], "LOUD") && contains2(nt.msgs[0], "100"), "loud alert listing the stopped pids: %v", nt.msgs)
+	must(t, contains2(nt.msgs[0], "netwatch resume --pid PID") && !contains2(nt.msgs[0], "Resume with: netwatch resume --all"), "the advice must be one that works on an unusable state: %v", nt.msgs)
 	must(t, w.procs[100].stopped, "netwatch must not touch what it cannot attribute")
-	// Missing file with a stopped process: also loud.
+	// Missing file with a stopped process: fails closed and logs, but no
+	// LOUD alert or notification (red-team F1: a first run on a host with
+	// a Ctrl-Z'd job must not raise an alarm about someone else's pid).
 	os.Remove(fs.Path)
+	n0, alerts0 := len(nt.msgs), len(ev.named(record.ResourceAlert))
 	rep = mk().Recover()
 	must(t, errors.Is(rep.Err, ErrMissing) && rep.FailedOK, "missing with stopped procs: %+v", rep)
+	must(t, len(nt.msgs) == n0, "missing state must not notify: %v", nt.msgs[n0:])
+	must(t, len(ev.named(record.ResourceAlert)) == alerts0 && len(ev.named("GUARD_STATE_MISSING")) == 1, "missing state logs once, no alert")
+	must(t, w.procs[100].stopped, "still untouched")
 	// Missing file on a clean host: first run, quiet.
 	w.procs[100].stopped = false
 	n := len(nt.msgs)
@@ -332,35 +340,42 @@ func TestManualResumeFailsClosed(t *testing.T) {
 
 func TestRollbackGate(t *testing.T) {
 	r := pausedTwo(t, ModePause)
-	rep, err := RollbackGate(r.st, r.w, false)
+	rep, err := RollbackGate(r.st, r.w, 0, false)
 	must(t, errors.Is(err, ErrPausedRemain) && len(rep.Live) == 2, "must refuse while live paused groups remain: %v %+v", err, rep)
-	rep, err = RollbackGate(r.st, r.w, true)
+	rep, err = RollbackGate(r.st, r.w, 0, true)
 	must(t, err == nil && rep.Forced && contains(rep.StoppedPIDs, 101) && contains(rep.StoppedPIDs, 201), "--force lists the stopped pids: %v %+v", err, rep)
 	// The documented order: alert (resumes everything), resume --all, swap.
 	r.m.SetMode(ModeAlert)
 	r.poll(2*time.Second, normal)
 	_, err = ManualResume(r.st, r.w, r.w, r.at, 0, true)
 	must(t, err == nil, "resume --all after alert: %v", err)
-	_, err = RollbackGate(r.st, r.w, false)
+	_, err = RollbackGate(r.st, r.w, 0, false)
 	must(t, err == nil, "gate passes once nothing is paused: %v", err)
 	// Records whose pids are dead do not block.
 	d := pausedTwo(t, ModePause)
 	for _, p := range d.w.procs {
 		p.dead = true
 	}
-	_, err = RollbackGate(d.st, d.w, false)
+	_, err = RollbackGate(d.st, d.w, 0, false)
 	must(t, err == nil, "dead groups are pruned, not blocking: %v", err)
 	// A missing file means nothing paused; a corrupt one refuses unless forced.
 	d2 := t.TempDir()
 	os.Chmod(d2, 0o700)
 	fs := &FileStore{Path: filepath.Join(d2, "s.json")}
-	_, err = RollbackGate(fs, d.w, false)
+	_, err = RollbackGate(fs, d.w, 0, false)
 	must(t, err == nil, "missing: %v", err)
 	os.WriteFile(fs.Path, []byte("x"), 0o600)
-	_, err = RollbackGate(fs, d.w, false)
+	_, err = RollbackGate(fs, d.w, 0, false)
 	must(t, err != nil, "corrupt must refuse")
-	_, err = RollbackGate(fs, d.w, true)
+	_, err = RollbackGate(fs, d.w, 0, true)
 	must(t, err == nil, "corrupt with --force proceeds")
+	// Red-team F1: forced on an unusable state, it lists the caller's
+	// stopped pids so they can be resumed one by one.
+	u := pausedTwo(t, ModePause)
+	rep, err = RollbackGate(fs, u.w, 0, true)
+	must(t, err == nil && rep.Unusable != nil && contains(rep.StoppedPIDs, 101) && contains(rep.StoppedPIDs, 201), "unusable + force lists stopped pids: %v %+v", err, rep)
+	rep, _ = RollbackGate(fs, u.w, 7, true)
+	must(t, len(rep.StoppedPIDs) == 0, "another uid's stopped pids are not listed: %+v", rep)
 }
 
 // intentSig fails the test if a SIGSTOP goes out before the record is on disk.
@@ -429,4 +444,27 @@ func TestKillInFlightNeverEndsInSIGKILLWhenKillDisabled(t *testing.T) {
 		r.ex.Shutdown()
 		must(t, r.w.count(syscall.SIGKILL) == 0, "%s: shutdown must not SIGKILL", name)
 	}
+}
+
+// TestResumePIDRecoversFromUnusableState pins red-team F1: with the state
+// unusable, resume --all cannot work, so one stopped pid of the caller's
+// own uid can be continued directly; everything else is refused.
+func TestResumePIDRecoversFromUnusableState(t *testing.T) {
+	r := pausedTwo(t, ModePause)
+	dir := t.TempDir()
+	os.Chmod(dir, 0o700)
+	bad := &FileStore{Path: filepath.Join(dir, "s.json")}
+	os.WriteFile(bad.Path, []byte("{garbage"), 0o600)
+	_, err := ManualResume(bad, r.w, r.w, r.at, 0, true)
+	must(t, err != nil, "setup: resume --all refuses on a corrupt state")
+
+	must(t, errors.Is(ResumePID(bad, r.w, r.w, 101, 7), ErrNotOwn), "another uid is refused")
+	must(t, errors.Is(ResumePID(bad, r.w, r.w, 4242, 0), ErrNotStopped), "an unknown pid is refused")
+	must(t, errors.Is(ResumePID(bad, r.w, r.w, 1, 0), ErrRefused), "pid 1 is refused")
+	must(t, errors.Is(ResumePID(r.st, r.w, r.w, 101, 0), ErrInRecord), "a recorded member must be resumed by group")
+	must(t, r.w.count(syscall.SIGCONT) == 0, "nothing signalled by the refusals")
+
+	must(t, ResumePID(bad, r.w, r.w, 101, 0) == nil, "own stopped pid resumes")
+	must(t, r.w.count(syscall.SIGCONT) == 1 && !r.w.procs[101].stopped, "exactly one SIGCONT, to 101")
+	must(t, errors.Is(ResumePID(bad, r.w, r.w, 101, 0), ErrNotStopped), "a running pid is not stopped any more")
 }

@@ -191,7 +191,9 @@ The guard protects the host, not individual jobs. It has no per-job size or grow
 
 1. **Alert.** A `RESOURCE_ALERT` or `HOST_AT_RISK_UNPROTECTED` event and a notification name the process, its app and the agent that launched it.
 2. **Pause.** The agent job that is causing the danger is stopped with `SIGSTOP`. A paused job keeps all its memory and work. It is resumed with `SIGCONT` once memory pressure has been normal for 30 seconds, after at most 30 minutes if pressure is no longer critical, or after 2 hours regardless. Resume it yourself with `netwatch resume PGID` or `netwatch resume --all`. A group you resume by hand is not paused or killed again during the same danger episode; alerts continue. A resume during the kill stage cancels the kill for that group. While the daemon runs, `resume` continues the group at once and the daemon updates its records on its next poll.
-3. **Kill** (Linux only; never on macOS, see below), only as a last resort, only in `pause+kill` mode, and only when the paused job is the proven cause: critical pressure for a full minute after the pause, or the memory compressor at 95% or more. The job gets `SIGTERM`, then `SIGKILL` 5 seconds later.
+3. **Kill** (Linux only; never on macOS, see below), only as a last resort, only in `pause+kill` mode, and only when the paused job is the proven cause: critical pressure for a full minute after the pause, or the memory compressor at 95% or more. The job gets `SIGTERM`, then `SIGKILL` 5 seconds later. If netwatch restarts in a mode that cannot kill while a kill is under way, the job is resumed instead of getting `SIGKILL`.
+
+If netwatch cannot read the system's memory state, it takes no new action, but the 30 minute and 2 hour limits still resume a paused job.
 
 **Danger** means one of: critical memory pressure; the compressor at 85% of its limit or more; swap at 85% of swap plus free disk; one agent group at 75% of RAM and growing over 1 GB a minute; or a group whose growth would use the remaining memory within 15 seconds, confirmed by one of the other signals.
 
@@ -203,7 +205,7 @@ netwatch guard alert
 
 **What it may touch.** Only Claude Code tool-call jobs: the process group of a shell that Claude Code started for a Bash tool call, including jobs backgrounded with `&` or `nohup`. Kill also requires that the job's own environment confirms its Claude Code parent and that the Claude Code version has passed the shape check (`netwatch guard verify-shape`). Jobs that only look like agent jobs (`CLAUDECODE` set, no terminal), and the leftovers of a short-lived Claude Code child that exited before netwatch could classify it, can be paused but never killed.
 
-**What it never touches:** Claude Code itself and its MCP servers; anything in a terminal, `tmux` or `screen`; other apps (Chrome, editors, …); other users' processes and system processes; virtual machines, containers and databases (`qemu`, `limactl`, `colima`, `vfkit`, `docker`, `VirtualBox`, `postgres`, `mysqld`, `redis-server`, `mongod`; the list is configurable). When one of these is the cause, the guard only alerts.
+**What it never touches:** Claude Code itself and its MCP servers; anything in a terminal, `tmux` or `screen`; other apps (Chrome, editors, …); other users' processes and system processes; virtual machines, containers and databases (`qemu`, `limactl`, `colima`, `vfkit`, `docker`, `VirtualBox`, `postgres`, `mysqld`, `redis-server`, `mongod`; `guard_never_signal` in the config adds names to this list and cannot remove any). When one of these is the cause, the guard only alerts.
 
 **Codex and other agent harnesses get alerts only.** They move to guarded once their process shape has been verified live.
 
@@ -222,6 +224,15 @@ netwatch guard alert      # stop pausing and killing
 ```
 
 `netwatch uninstall` also resumes every paused group before removing the service.
+
+**If the guard state is lost.** netwatch records every job it pauses in a state file before it signals it. If that file is corrupt or unreadable, netwatch adopts nothing and sends a loud alert listing the stopped processes it found, and `netwatch resume --all` cannot work because there is no record to resume from. List your stopped processes and resume the ones netwatch paused one at a time:
+
+```sh
+netwatch resume --all --check --force   # lists your stopped processes
+netwatch resume --pid PID               # resumes one of them (your own processes only)
+```
+
+Some of the listed processes may have been stopped by you (for example with Ctrl-Z), not by netwatch. A missing state file on a first run is normal and is only logged.
 
 ## Privacy
 
