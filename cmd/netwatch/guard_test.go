@@ -384,3 +384,38 @@ func TestGuardStatusListsPausedGroupsAndKillAvailability(t *testing.T) {
 		}
 	}
 }
+
+// While a daemon holds the run lock, resume does not rewrite the state
+// file; it files a request for the daemon (code-inspection F1). With the
+// lock free it updates the file itself.
+func TestResumeWhileDaemonRunsFilesRequest(t *testing.T) {
+	logDir := t.TempDir()
+	stateDir, stateFile, _ := statePaths(logDir)
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	req, unlock := resumeRequests(logDir)
+	if req != nil {
+		t.Fatal("no daemon: the CLI must write the state itself")
+	}
+	unlock()
+	hold, err := lockRun(filepath.Join(logDir, "run.lock")) // a "daemon"
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hold()
+	req, unlock = resumeRequests(logDir)
+	defer unlock()
+	if req == nil {
+		t.Fatal("daemon running: the CLI must file a request, not write the state")
+	}
+	if err := req.Add("pg:4242:1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stateFile); !os.IsNotExist(err) {
+		t.Fatalf("state file touched: %v", err)
+	}
+	if ents, _ := os.ReadDir(stateDir); len(ents) != 1 {
+		t.Fatalf("want one request file, got %d", len(ents))
+	}
+}

@@ -52,6 +52,16 @@ func prune(st *State, view ProcView) []int {
 // prunes dead or mismatched pids first. The daemon notices the removal
 // through Executor.Reconcile.
 func ManualResume(store Store, view ProcView, sig Signaller, now time.Time, pgid int, all bool) (ResumeReport, error) {
+	return ManualResumeLive(store, view, sig, now, pgid, all, nil)
+}
+
+// ManualResumeLive is ManualResume for either case. With req nil, no
+// daemon runs (the caller holds the run lock) and the state file is
+// updated directly. With req set, a daemon runs: the CLI sends SIGCONT at
+// once for the user, never writes the state file, and files a request per
+// group so the daemon drops the record and resumes any member it stopped
+// since.
+func ManualResumeLive(store Store, view ProcView, sig Signaller, now time.Time, pgid int, all bool, req ResumeRequests) (ResumeReport, error) {
 	var rep ResumeReport
 	st, err := store.Load()
 	if err != nil {
@@ -69,7 +79,7 @@ func ManualResume(store Store, view ProcView, sig Signaller, now time.Time, pgid
 			}
 		}
 		if len(targets) == 0 {
-			if len(rep.Pruned) > 0 {
+			if len(rep.Pruned) > 0 && req == nil {
 				store.Save(st)
 			}
 			return rep, fmt.Errorf("%w: pgid %d", ErrNotRecorded, pgid)
@@ -86,10 +96,19 @@ func ManualResume(store Store, view ProcView, sig Signaller, now time.Time, pgid
 			}
 		}
 		rep.Resumed = append(rep.Resumed, r.PGID)
+		if req != nil {
+			if err := req.Add(r.Key()); err != nil {
+				return rep, fmt.Errorf("resume request for pgid %d: %w", r.PGID, err)
+			}
+			continue
+		}
 		delete(st.Groups, r.Key())
 		st.LastResume[r.Key()] = now
 	}
 	sort.Ints(rep.Resumed)
+	if req != nil {
+		return rep, nil
+	}
 	if _, err := store.Save(st); err != nil {
 		return rep, err
 	}

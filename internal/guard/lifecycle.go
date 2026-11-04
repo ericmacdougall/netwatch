@@ -85,6 +85,23 @@ func (m *Machine) Forget(key string, now time.Time) {
 	}
 }
 
+// ResumeKey resumes one recorded group on request (netwatch resume while
+// the daemon runs): every recorded member gets SIGCONT, including members
+// paused after the CLI read the state file.
+func (m *Machine) ResumeKey(key string, now time.Time, why string) []Action {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.st.Groups[key]
+	if !ok {
+		return nil
+	}
+	a := m.resumeAction(r, why)
+	delete(m.st.Groups, key)
+	m.st.LastResume[key] = now
+	m.dirty = true
+	return []Action{a}
+}
+
 // RecordKeys lists the recorded group keys.
 func (m *Machine) RecordKeys() []string {
 	m.mu.Lock()

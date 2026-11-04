@@ -169,15 +169,64 @@ func TestMaxPauseHoldsUnderCriticalAndAbsoluteCapResumes(t *testing.T) {
 	must(t, r.paused(100), "stays paused again until the next cap")
 }
 
+type memRequests struct{ keys []string }
+
+func (m *memRequests) Add(k string) error { m.keys = append(m.keys, k); return nil }
+func (m *memRequests) Take() ([]string, error) {
+	k := m.keys
+	m.keys = nil
+	return k, nil
+}
+
+// netwatch resume while the daemon runs: the CLI resumes at once, never
+// writes the state file, and the daemon drops the record on its next poll.
 func TestManualResumeUsesSameRecordsAndReconcile(t *testing.T) {
 	r := pausedTwo(t, ModePause)
-	rep, err := ManualResume(r.st, r.w, r.w, r.at, 100, false)
+	req := &memRequests{}
+	r.ex.Requests = req
+	before, _ := r.st.Load()
+	rep, err := ManualResumeLive(r.st, r.w, r.w, r.at, 100, false, req)
 	must(t, err == nil && len(rep.Resumed) == 1 && rep.Resumed[0] == 100, "manual resume: %v %+v", err, rep)
 	must(t, !r.w.procs[100].stopped && !r.w.procs[101].stopped, "members must run")
-	must(t, r.paused(100), "the daemon still holds the record until it reconciles")
+	after, _ := r.st.Load()
+	must(t, len(after.Groups) == len(before.Groups), "the CLI must not write the state file while the daemon runs")
 	must(t, r.ex.Reconcile() == nil, "reconcile")
 	must(t, r.rec(100) == nil, "the daemon must drop the record the CLI released")
 	n := r.w.count(syscall.SIGSTOP)
 	r.poll(2*time.Second, normal)
 	must(t, r.w.count(syscall.SIGSTOP) == n, "a manually resumed group must not be paused again by new-children logic")
+}
+
+// Code-inspection F1: the daemon pauses another group after the CLI read
+// the state, and stops a new child of the released group before the
+// request is taken. Neither may be lost: the other group stays recorded
+// (and resumable), and the daemon's own resume reaches the new child.
+func TestManualResumeRacesWithDaemon(t *testing.T) {
+	r := newRig(t, ModePause)
+	r.tool(100, 5*gib, 101)
+	r.run(14, 2*time.Second, crit)
+	must(t, r.paused(100), "setup: 100 paused")
+	req := &memRequests{}
+	r.ex.Requests = req
+	// CLI: releases 100 (reads the state, signals, files a request).
+	_, err := ManualResumeLive(r.st, r.w, r.w, r.at, 100, false, req)
+	must(t, err == nil, "resume: %v", err)
+	// Daemon, before taking the request: pauses a new group 200 and
+	// re-stops 100's members plus a new child 102 as "new children".
+	r.tool(200, 6*gib, 201)
+	r.w.add(102, 100, 100, r.at)
+	r.run(6, 2*time.Second, crit)
+	must(t, r.paused(200), "setup: 200 paused after the CLI read the state")
+	// The daemon takes the request on its next poll.
+	must(t, r.ex.Reconcile() == nil, "reconcile")
+	must(t, r.rec(100) == nil, "100 released")
+	for _, pid := range []int{100, 101, 102} {
+		must(t, !r.w.procs[pid].stopped, "pid %d left stopped after the manual resume", pid)
+	}
+	must(t, r.paused(200), "200 must stay recorded")
+	st, _ := r.st.Load()
+	_, ok := st.Groups[r.rec(200).Key()]
+	must(t, ok, "200 must stay in the state file")
+	rep, err := ManualResume(r.st, r.w, r.w, r.at, 200, false)
+	must(t, err == nil && len(rep.Resumed) == 1, "200 stays resumable: %v %+v", err, rep)
 }

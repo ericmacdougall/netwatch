@@ -173,3 +173,38 @@ func TestDaemonProcs(t *testing.T) {
 		}
 	}
 }
+
+// Code-inspection F3: a symlink to the installed agent's log directory is
+// refused like the directory itself (checked only where it exists).
+func TestTestDaemonRefusesSymlinkToInstalledLogDir(t *testing.T) {
+	if _, err := os.Stat(collector.DefaultLogDir()); err != nil {
+		t.Skip("no installed log directory on this host")
+	}
+	cfgFile := filepath.Join(t.TempDir(), "c.json")
+	if err := os.WriteFile(cfgFile, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "logs")
+	if err := os.Symlink(collector.DefaultLogDir(), link); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	code := run([]string{"--config", cfgFile, "--log-dir", link, "run", "--test-daemon", "--", "true"}, &out, &errb)
+	if code == 0 || !strings.Contains(errb.String(), "installed agent") {
+		t.Fatalf("symlinked installed log dir: exit %d %q", code, errb.String())
+	}
+}
+
+func TestSamePathSeesThroughSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	link := filepath.Join(t.TempDir(), "l")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Fatal(err)
+	}
+	if !samePath(dir, link) || !samePath(dir, dir+"/.") {
+		t.Fatal("a symlink or an unclean spelling must count as the same path")
+	}
+	if samePath(dir, t.TempDir()) {
+		t.Fatal("different directories")
+	}
+}

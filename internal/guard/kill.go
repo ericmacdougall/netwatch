@@ -106,16 +106,20 @@ func (m *Machine) beginKill(r *Record, g *gview, s Snapshot, prong string) Actio
 }
 
 // liveMembers is the union of the recorded members and the group's
-// current non-excluded members, each pid once.
+// current non-excluded members, each pid once. A recorded pid that is now
+// excluded (it exec'd a never-signal program) is left out too.
 func (m *Machine) liveMembers(r *Record, g *gview) []Member {
 	seen := map[int]bool{}
 	var out []Member
 	if g != nil {
 		for _, mem := range g.G.Members {
-			if mem.Excluded || seen[mem.PID] {
+			if seen[mem.PID] {
 				continue
 			}
 			seen[mem.PID] = true
+			if mem.Excluded {
+				continue
+			}
 			out = append(out, mem)
 		}
 	}
