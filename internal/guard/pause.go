@@ -63,6 +63,9 @@ func (m *Machine) pauseStep(s Snapshot, v *view) []Action {
 		if t, ok := m.st.LastResume[g.Key]; ok && t.Equal(now) {
 			continue // released this very poll (max pause): do not flap
 		}
+		if ep.Held[g.Key] {
+			continue // resumed by hand this episode: the user's call
+		}
 		why := m.causal(s, v, g)
 		if why == "" {
 			continue

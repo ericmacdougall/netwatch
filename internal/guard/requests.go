@@ -63,3 +63,26 @@ func (d DirRequests) Take() ([]string, error) {
 	}
 	return keys, nil
 }
+
+// Clear removes every request and any temp file a crashed writer left.
+// Only safe while no daemon can take requests (the caller holds run.lock):
+// with no daemon, a pending request has no reader.
+func (d DirRequests) Clear() error {
+	ents, err := os.ReadDir(d.Dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, e := range ents {
+		n := e.Name()
+		if strings.HasPrefix(n, reqPrefix) ||
+			(strings.HasPrefix(n, "."+reqPrefix) && strings.Contains(n, ".tmp-")) {
+			if rerr := os.Remove(filepath.Join(d.Dir, n)); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+				err = rerr
+			}
+		}
+	}
+	return err
+}

@@ -394,17 +394,35 @@ func TestResumeWhileDaemonRunsFilesRequest(t *testing.T) {
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	req, unlock := resumeRequests(logDir)
-	if req != nil {
-		t.Fatal("no daemon: the CLI must write the state itself")
+	// A request left by a daemon that stopped before taking it is cleared
+	// when the CLI finds the lock free.
+	if err := (guard.DirRequests{Dir: stateDir}).Add("pg:7:1"); err != nil {
+		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(stateDir, ".resume-7-1.tmp-ab"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "keep.json"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	req, unlock, err := resumeRequests(logDir)
+	if err != nil || req != nil {
+		t.Fatalf("no daemon: the CLI must write the state itself (%v)", err)
+	}
+	if ents, _ := os.ReadDir(stateDir); len(ents) != 1 || ents[0].Name() != "keep.json" {
+		t.Fatalf("stale requests not swept (or other files touched): %v", ents)
+	}
+	_ = os.Remove(filepath.Join(stateDir, "keep.json"))
 	unlock()
 	hold, err := lockRun(filepath.Join(logDir, "run.lock")) // a "daemon"
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer hold()
-	req, unlock = resumeRequests(logDir)
+	req, unlock, err = resumeRequests(logDir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer unlock()
 	if req == nil {
 		t.Fatal("daemon running: the CLI must file a request, not write the state")
@@ -417,5 +435,16 @@ func TestResumeWhileDaemonRunsFilesRequest(t *testing.T) {
 	}
 	if ents, _ := os.ReadDir(stateDir); len(ents) != 1 {
 		t.Fatalf("want one request file, got %d", len(ents))
+	}
+}
+
+// A lock error other than "held" is not mistaken for a running daemon.
+func TestResumeLockErrorIsNotADaemon(t *testing.T) {
+	logDir := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(logDir, nil, 0o600); err != nil { // a file, not a directory
+		t.Fatal(err)
+	}
+	if req, _, err := resumeRequests(logDir); err == nil || req != nil {
+		t.Fatalf("want an error, got req=%v err=%v", req, err)
 	}
 }

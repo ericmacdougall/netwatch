@@ -230,3 +230,31 @@ func TestManualResumeRacesWithDaemon(t *testing.T) {
 	rep, err := ManualResume(r.st, r.w, r.w, r.at, 200, false)
 	must(t, err == nil && len(rep.Resumed) == 1, "200 stays resumable: %v %+v", err, rep)
 }
+
+// Code inspection round 2: a manual resume while danger persists is not
+// undone. The group is not paused again (nor killed) for the rest of the
+// episode; another group still is; a new episode guards it again.
+func TestManualResumeHoldsForTheEpisode(t *testing.T) {
+	r := newRig(t, ModePauseKill)
+	r.tool(100, 5*gib, 101)
+	r.run(14, 2*time.Second, crit)
+	must(t, r.paused(100), "setup: 100 paused")
+	req := &memRequests{}
+	r.ex.Requests = req
+	_, err := ManualResumeLive(r.st, r.w, r.w, r.at, 100, false, req)
+	must(t, err == nil, "resume: %v", err)
+	must(t, r.ex.Reconcile() == nil, "reconcile")
+	resumedAt := r.at
+	r.grow(100, 3*gib) // still growing, danger continues
+	r.run(60, 2*time.Second, crit)
+	must(t, r.rec(100) == nil && !r.w.procs[100].stopped, "a group resumed by hand must not be paused again this episode")
+	for _, ta := range r.timed {
+		if (ta.a.Kind == ActTerm || ta.a.Kind == ActPause) && ta.a.PGID == 100 && ta.at.After(resumedAt) {
+			t.Fatalf("%v of 100 after the manual resume", ta.a.Kind)
+		}
+	}
+	// Control: another group in the same episode is still paused.
+	r.tool(200, 6*gib, 201)
+	r.run(10, 2*time.Second, crit)
+	must(t, r.paused(200), "other groups are still guarded")
+}
