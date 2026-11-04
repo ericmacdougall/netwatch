@@ -30,12 +30,18 @@ type Lister interface {
 	AppendChildren(dst []int, pid int) ([]int, error)
 }
 
+// ExeResolver resolves one process's executable path ("" if unreadable).
+type ExeResolver interface {
+	ExePath(pid int) string
+}
+
 // Full is a Reader that also offers the fast paths. Both platform readers
 // satisfy it.
 type Full interface {
 	Reader
 	Prober
 	Lister
+	ExeResolver
 }
 
 // MaxListed bounds one pid listing so a fork bomb cannot make a poll

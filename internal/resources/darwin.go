@@ -301,3 +301,6 @@ func (r *darwinReader) SelfTest() error {
 }
 
 var errLayout = errors.New("self-test: proc_taskinfo and rusage_info_v2 disagree; struct layout is wrong")
+
+// ExePath implements ExeResolver.
+func (r *darwinReader) ExePath(pid int) string { return pidPath(pid) }
