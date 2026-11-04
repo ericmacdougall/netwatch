@@ -198,20 +198,24 @@ func (a *app) startResources(ctx context.Context, d resourceDeps) (<-chan error,
 		}
 	}
 
+	elig := &resmon.Elig{R: r, SelfPID: os.Getpid(), UID: os.Getuid(),
+		NeverSignal: d.cfg.GuardNeverSignal, Versions: d.cfg.GuardClaudeVersions,
+		AllowlistDir: allowDir, Labeler: labeler}
+	if tt != nil {
+		elig.TestJobPGID = tt.PGID
+	}
 	loop := resmon.New(resmon.Deps{
-		R: loopR,
-		Classifier: &resmon.Elig{R: r, SelfPID: os.Getpid(), UID: os.Getuid(),
-			NeverSignal: d.cfg.GuardNeverSignal, Versions: d.cfg.GuardClaudeVersions,
-			AllowlistDir: allowDir, Labeler: labeler},
-		Machine:   m,
-		Exec:      exec,
-		Alerts:    alerts.New(alertsConfig(d.cfg), d.notifier, recordSink{d.events}),
-		Sampler:   sampler.New(r, 10),
-		Resources: eventlog.NewWriter(filepath.Join(a.logDir, "resources.jsonl"), max),
-		Events:    sink,
-		Notify:    d.notifier,
-		Budget:    budget.Config{Dir: budgetDir, RunCappedPaths: d.cfg.RunCappedPaths},
-		Watcher:   resmon.NewWatcher(ctx, r, errs),
+		R:          loopR,
+		Classifier: elig,
+		Machine:    m,
+		Exec:       exec,
+		Alerts:     alerts.New(alertsConfig(d.cfg), d.notifier, recordSink{d.events}),
+		Sampler:    sampler.New(r, 10),
+		Resources:  eventlog.NewWriter(filepath.Join(a.logDir, "resources.jsonl"), max),
+		Events:     sink,
+		Notify:     d.notifier,
+		Budget:     budget.Config{Dir: budgetDir, RunCappedPaths: d.cfg.RunCappedPaths},
+		Watcher:    resmon.NewWatcher(ctx, r, errs),
 		Mode: func() (guard.Mode, bool) {
 			mode, _ := effectiveMode(d.cfg, stateDir, runtime.GOOS)
 			return mode, true

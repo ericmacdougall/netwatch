@@ -52,7 +52,11 @@ type Input struct {
 	Allowlist []string
 	Budgets   []budget.Declared
 	SelfPID   int // netwatch itself; it and its children are excluded
-	UID       int // our uid; other uids are excluded
+	// TestJobPGID is a test daemon's spawned job group (0: none). It is a
+	// child of netwatch but not part of netwatch's excluded subtree, so the
+	// job's footprint is counted; no other child of netwatch is affected.
+	TestJobPGID int
+	UID         int // our uid; other uids are excluded
 	// Resolver caches owner-app lookups (optional).
 	Resolver *attrib.Resolver
 	// Coalition returns a macOS coalition id for pid (optional).
@@ -195,6 +199,9 @@ func (c *classifier) markExclusions() {
 				if seen[k] || k == 1 {
 					continue
 				}
+				if c.testJob(r.name, k) {
+					continue
+				}
 				seen[k] = true
 				if _, ok := c.rule[k]; !ok {
 					c.rule[k] = r.name
@@ -203,6 +210,16 @@ func (c *classifier) markExclusions() {
 			}
 		}
 	}
+}
+
+// testJob reports whether pid is in the test daemon's job group, which
+// the netwatch subtree rule must not swallow.
+func (c *classifier) testJob(root string, pid int) bool {
+	if root != "netwatch" || c.in.TestJobPGID == 0 {
+		return false
+	}
+	p, ok := c.procs[pid]
+	return ok && p.PGID == c.in.TestJobPGID
 }
 
 // interactive reports an interactive or login shell: argv[0] with a
@@ -434,7 +451,7 @@ func (c *classifier) excludedFunc() func(p *resources.Proc, exe string) bool {
 		}
 	}
 	rule := c.rule
-	never, uid, self := c.never, c.in.UID, c.in.SelfPID
+	never, uid, self, testPGID := c.never, c.in.UID, c.in.SelfPID, c.in.TestJobPGID
 	return func(p *resources.Proc, exe string) bool {
 		if s, ok := known[p.PID]; ok && s.Equal(p.Start) {
 			return true
@@ -450,6 +467,9 @@ func (c *classifier) excludedFunc() func(p *resources.Proc, exe string) bool {
 			return true
 		}
 		// A new child of an excluded process is part of its subtree.
+		if rule[p.PPID] == "netwatch" && testPGID != 0 && p.PGID == testPGID {
+			return false
+		}
 		if s, ok := known[p.PPID]; ok {
 			if q, ok2 := c.procs[p.PPID]; ok2 && q.Start.Equal(s) {
 				switch rule[p.PPID] {

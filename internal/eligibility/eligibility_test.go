@@ -603,3 +603,40 @@ func TestRecordForNonShellIsNotAToolGroup(t *testing.T) {
 		t.Fatalf("%+v", g)
 	}
 }
+
+// netwatch's own children are excluded with it, except a test daemon's
+// spawned job group: its footprint must count or the guard never sees it.
+// Control: without TestJobPGID the job is excluded like any other child.
+func TestTestJobIsNotInNetwatchSubtree(t *testing.T) {
+	w := newWorld()
+	w.add(9999, 1, 9999, 9999, "/usr/local/bin/netwatch", me, false)
+	w.add(700, 9999, 700, 9999, "/bin/sh", me, false)      // the spawned job (own pgid)
+	w.add(701, 700, 700, 9999, "/usr/bin/ramp", me, false) // its child
+	w.add(702, 9999, 9999, 9999, "/bin/ps", me, false)     // a netwatch helper
+	classify := func(testPGID int) Output {
+		return Classify(Input{Procs: w.procs, SelfPID: 9999, UID: me, TestJobPGID: testPGID,
+			Env: func(int, ...string) map[string]string { return nil }})
+	}
+	o := classify(700)
+	for _, pid := range []int{700, 701} {
+		if o.Excluded(w.proc(pid), w.proc(pid).Exe) {
+			t.Errorf("test job member %d excluded", pid)
+		}
+	}
+	if !o.Excluded(w.proc(702), "/bin/ps") || !o.Excluded(w.proc(9999), "/usr/local/bin/netwatch") {
+		t.Error("netwatch and its helper must stay excluded")
+	}
+	// A child forked after the scan, in the job group, is not excluded.
+	late := resources.Proc{PID: 703, PPID: 700, PGID: 700, UID: me, Start: t0.Add(time.Hour)}
+	if o.Excluded(&late, "/usr/bin/ramp") {
+		t.Error("late job child excluded")
+	}
+	// A late direct child of netwatch outside the job group is excluded.
+	helper := resources.Proc{PID: 704, PPID: 9999, PGID: 9999, UID: me, Start: t0.Add(time.Hour)}
+	if !o.Excluded(&helper, "/bin/ps") {
+		t.Error("late netwatch helper not excluded")
+	}
+	if c := classify(0); !c.Excluded(w.proc(700), "/bin/sh") {
+		t.Fatal("control: without TestJobPGID the job is part of netwatch's subtree")
+	}
+}
