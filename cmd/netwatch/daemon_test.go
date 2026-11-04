@@ -32,7 +32,7 @@ func TestGuardInstallNote(t *testing.T) {
 }
 
 // A test daemon refuses to start without explicit paths, on the installed
-// agent's log directory, or without a valid live target.
+// agent's log directory, or without a job of its own to guard.
 func TestTestDaemonRefusals(t *testing.T) {
 	cfgFile := filepath.Join(t.TempDir(), "c.json")
 	if err := os.WriteFile(cfgFile, []byte(`{}`), 0o600); err != nil {
@@ -45,7 +45,9 @@ func TestTestDaemonRefusals(t *testing.T) {
 	}{
 		{"no explicit paths", []string{"run", "--test-daemon"}, "explicit --config and --log-dir"},
 		{"installed log dir", []string{"--config", cfgFile, "--log-dir", collector.DefaultLogDir(), "run", "--test-daemon"}, "installed agent"},
-		{"no target", []string{"--config", cfgFile, "--log-dir", t.TempDir(), "run", "--test-daemon"}, "guard_test_target"},
+		{"no job", []string{"--config", cfgFile, "--log-dir", t.TempDir(), "run", "--test-daemon"}, "needs a job"},
+		{"empty job", []string{"--config", cfgFile, "--log-dir", t.TempDir(), "run", "--test-daemon", "--"}, "needs a job"},
+		{"bad tier", []string{"--config", cfgFile, "--log-dir", t.TempDir(), "run", "--test-daemon", "--test-tier", "nuke", "--", "true"}, "want pause or kill"},
 	}
 	for _, c := range cases {
 		var out, errb bytes.Buffer
@@ -66,7 +68,7 @@ func TestRefusedTestDaemonHasNoSideEffects(t *testing.T) {
 	logDir := t.TempDir()
 	var out, errb bytes.Buffer
 	if code := run([]string{"--config", cfgFile, "--log-dir", logDir, "run", "--test-daemon"}, &out, &errb); code == 0 {
-		t.Fatal("test daemon without a target started")
+		t.Fatal("test daemon without a job started")
 	}
 	ents, err := os.ReadDir(logDir)
 	if err != nil {
@@ -105,5 +107,54 @@ func TestShapeWindowStart(t *testing.T) {
 	}
 	if _, ok := shapeWindowStart(kids[:1]); ok {
 		t.Fatal("no shaped child must mean no transcript read")
+	}
+}
+
+// A job passed without --test-daemon is an unexpected argument: only a
+// test daemon spawns anything.
+func TestRunRejectsJobWithoutTestDaemon(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := run([]string{"--log-dir", t.TempDir(), "run", "--", "true"}, &out, &errb); code != 2 {
+		t.Fatalf("run -- true: exit %d %s", code, errb.String())
+	}
+}
+
+// The test daemon spawns its job as the leader of a new process group,
+// records that group, and exits when the job does.
+func TestTestDaemonSpawnsJobInOwnGroup(t *testing.T) {
+	cfgFile := filepath.Join(t.TempDir(), "c.json")
+	if err := os.WriteFile(cfgFile, []byte(`{"notify":false,"guard_mode":"alert"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	logDir := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "ids")
+	job := []string{"sh", "-c", "echo $$ $(ps -o pgid= -p $$) > " + marker + "; sleep 1"}
+	var out, errb bytes.Buffer
+	code := make(chan int, 1)
+	go func() {
+		code <- run(append([]string{"--config", cfgFile, "--log-dir", logDir, "run", "--test-daemon", "--"}, job...), &out, &errb)
+	}()
+	select {
+	case c := <-code:
+		if c != 0 {
+			t.Fatalf("exit %d: %s", c, errb.String())
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("test daemon did not exit after its job")
+	}
+	ids, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := strings.Fields(string(ids))
+	if len(f) != 2 || f[0] != f[1] {
+		t.Fatalf("job is not its own group leader: %q", ids)
+	}
+	rec, err := os.ReadFile(filepath.Join(logDir, "state", "test-target"))
+	if err != nil || strings.Fields(string(rec))[0] != f[0] {
+		t.Fatalf("state/test-target %q (%v), want pgid %s", rec, err, f[0])
+	}
+	if !strings.Contains(errb.String(), "test job exited: status 0") {
+		t.Fatalf("stderr: %s", errb.String())
 	}
 }

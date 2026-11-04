@@ -263,7 +263,7 @@ func TestTestTargetIsTheOnlyGroupSignalled(t *testing.T) {
 	f.sys = critical
 	f.add(100, 1, 100, 2*gib, gib/2) // target
 	f.add(200, 1, 200, 6*gib, gib)   // bystander: larger, faster
-	tt := &TestTarget{PGID: 100, Start: f.procs[100].Start}
+	tt := &TestTarget{PGID: 100, Start: f.procs[100].Start, Tier: guard.TierTool}
 	h := newHarness(t, f, guard.ModePauseKill, fixedClassifier{tool: []int{100, 200}}, tt)
 	h.run(3 * time.Minute)
 	if h.stopped(200) {

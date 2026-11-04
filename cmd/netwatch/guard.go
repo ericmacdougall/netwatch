@@ -134,6 +134,8 @@ func (a *app) cmdGuard(args []string) error {
 		return a.guardStatus(cfg, stateDir)
 	case "verify-shape":
 		return a.verifyShape(cfg, rest)
+	case "simulate":
+		return a.guardSimulate(stateDir, rest)
 	}
 	mode, err := guardmode.Parse(sub)
 	if err != nil {

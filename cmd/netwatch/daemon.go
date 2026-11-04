@@ -23,6 +23,7 @@ import (
 	"github.com/ericmacdougall/netwatch/internal/record"
 	"github.com/ericmacdougall/netwatch/internal/resmon"
 	"github.com/ericmacdougall/netwatch/internal/resources"
+	"github.com/ericmacdougall/netwatch/internal/safeio"
 	"github.com/ericmacdougall/netwatch/internal/sampler"
 	"github.com/ericmacdougall/netwatch/internal/shapecheck"
 	"github.com/ericmacdougall/netwatch/internal/transcript"
@@ -59,25 +60,71 @@ func (a *app) checkUnclean(events *eventlog.Writer) {
 	}
 }
 
-// testTarget validates a test daemon's target: it must parse and name a
-// live process group whose leader started at the stated time.
-func testTarget(cfg *config.Config, r resources.Full) (*resmon.TestTarget, error) {
-	if cfg.GuardTestTarget == "" {
-		return nil, errors.New("--test-daemon needs guard_test_target (PGID@START_UNIX_NANOS)")
+// testJobTier maps --test-tier to what the guard may do to the job.
+func testJobTier(s string) (guard.Tier, error) {
+	switch s {
+	case "pause":
+		return guard.TierFallback, nil
+	case "kill":
+		if !guardtestBuild {
+			return guard.TierNone, errors.New("--test-tier kill needs a guardtest build")
+		}
+		return guard.TierTool, nil
 	}
-	pgid, ns, err := config.ParseTestTarget(cfg.GuardTestTarget)
+	return guard.TierNone, usageError{fmt.Errorf("--test-tier: want pause or kill, not %q", s)}
+}
+
+// spawnTestJob starts the test daemon's job in its own process group and
+// records the group in <state>/test-target. The job's output goes to
+// test-job.log. When the job exits, stop is called so the daemon exits too.
+// The returned target is the only group the daemon may ever signal.
+func (a *app) spawnTestJob(argv []string, tier guard.Tier, stop func()) (*resmon.TestTarget, <-chan error, error) {
+	stateDir, _, _ := statePaths(a.logDir)
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return nil, nil, err
+	}
+	out, err := safeio.OpenAppend(filepath.Join(a.logDir, "test-job.log"))
 	if err != nil {
-		return nil, fmt.Errorf("guard_test_target: %w", err)
+		return nil, nil, err
 	}
+	cmd, err := startTestJob(argv, out)
+	out.Close()
+	if err != nil {
+		return nil, nil, fmt.Errorf("test job: %w", err)
+	}
+	pid := cmd.Process.Pid
 	var p resources.Proc
-	if err := r.Probe(pgid, &p); err != nil || p.PGID != pgid {
-		return nil, fmt.Errorf("guard_test_target: pid %d is not a live group leader", pgid)
+	if err := resources.New().Probe(pid, &p); err != nil || p.PGID != pid {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return nil, nil, fmt.Errorf("test job %d: cannot confirm its process group: %v", pid, err)
 	}
-	start := time.Unix(0, ns)
-	if d := p.Start.Sub(start); d > 10*time.Millisecond || d < -10*time.Millisecond {
-		return nil, fmt.Errorf("guard_test_target: pid %d started at %s, not %s", pgid, p.Start.UTC().Format(time.RFC3339Nano), start.UTC().Format(time.RFC3339Nano))
+	t := &resmon.TestTarget{PGID: pid, Start: p.Start, Tier: tier}
+	rec := fmt.Sprintf("%d %d\n", t.PGID, t.Start.UnixNano())
+	if err := safeio.WriteFileAtomic(stateDir, "test-target", []byte(rec)); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return nil, nil, err
 	}
-	return &resmon.TestTarget{PGID: pgid, Start: p.Start}, nil
+	fmt.Fprintf(a.stderr, "netwatch: test daemon guarding job group %d (%s only)\n", pid, tierText(tier))
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait(); stop() }()
+	return t, done, nil
+}
+
+func tierText(t guard.Tier) string {
+	if t == guard.TierTool {
+		return "pause and kill"
+	}
+	return "pause"
+}
+
+// exitText describes how a job ended.
+func exitText(err error) string {
+	if err == nil {
+		return "status 0"
+	}
+	return err.Error()
 }
 
 // refuseInstalledPaths keeps a test daemon away from the installed
@@ -123,7 +170,15 @@ func (a *app) startResources(ctx context.Context, d resourceDeps) (<-chan error,
 	mode, _ := effectiveMode(d.cfg, stateDir, runtime.GOOS)
 	m := guard.NewMachine(guardConfig(d.cfg, mode))
 	sink := &resmon.Sink{Events: d.events, Guard: eventlog.NewWriter(filepath.Join(stateDir, "guard-events.jsonl"), max)}
-	exec := &guard.Executor{M: m, Sig: guard.OSSignaller{Starts: guard.ReaderStart{R: r}, Self: os.Getpid()},
+	var sig guard.Signaller = guard.OSSignaller{Starts: guard.ReaderStart{R: r}, Self: os.Getpid()}
+	loopR := resources.Full(r)
+	if tt != nil {
+		// The hard boundary for live tests: no signal leaves the spawned
+		// job's group, whatever the classifier or the machine decide.
+		sig = resmon.SpawnedOnly{Inner: sig, R: r, Target: *tt}
+		loopR = testReader(r, stateDir)
+	}
+	exec := &guard.Executor{M: m, Sig: sig,
 		Store: &guard.FileStore{Path: stateFile}, View: guard.ReaderView{R: r}, Events: sink, Notify: d.notifier}
 
 	home, _ := os.UserHomeDir()
@@ -144,7 +199,7 @@ func (a *app) startResources(ctx context.Context, d resourceDeps) (<-chan error,
 	}
 
 	loop := resmon.New(resmon.Deps{
-		R: r,
+		R: loopR,
 		Classifier: &resmon.Elig{R: r, SelfPID: os.Getpid(), UID: os.Getuid(),
 			NeverSignal: d.cfg.GuardNeverSignal, Versions: d.cfg.GuardClaudeVersions,
 			AllowlistDir: allowDir, Labeler: labeler},

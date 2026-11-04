@@ -22,6 +22,7 @@ import (
 	"github.com/ericmacdougall/netwatch/internal/collector"
 	"github.com/ericmacdougall/netwatch/internal/config"
 	"github.com/ericmacdougall/netwatch/internal/eventlog"
+	"github.com/ericmacdougall/netwatch/internal/guard"
 	"github.com/ericmacdougall/netwatch/internal/monitor"
 	"github.com/ericmacdougall/netwatch/internal/notify"
 	"github.com/ericmacdougall/netwatch/internal/procscan"
@@ -29,7 +30,6 @@ import (
 	"github.com/ericmacdougall/netwatch/internal/redact"
 	"github.com/ericmacdougall/netwatch/internal/report"
 	"github.com/ericmacdougall/netwatch/internal/resmon"
-	"github.com/ericmacdougall/netwatch/internal/resources"
 )
 
 // version is set at build time with -ldflags "-X main.version=v1.2.3".
@@ -41,7 +41,9 @@ Usage:
   netwatch [--config FILE] [--log-dir DIR] <command> [flags]
 
 Commands:
-  run [--test-daemon]      sample forever (what the background service runs)
+  run                      sample forever (what the background service runs)
+  run --test-daemon [--test-tier pause|kill] -- CMD [ARGS]
+                           live-test the guard on one spawned job only
   once                     take one sample and one process scan, then exit
   report [--since 2h] [--json]
                            summarise the logs for a window (s, m, h or d)
@@ -224,26 +226,44 @@ func (a *app) cmdRun(args []string, once bool) error {
 		name = "once"
 	}
 	fs := a.flags(name)
-	testDaemon := false
+	testDaemon, testTier := false, "pause"
 	if !once {
-		fs.BoolVar(&testDaemon, "test-daemon", false, "foreground test mode: guard only guard_test_target (never used by the service)")
+		fs.BoolVar(&testDaemon, "test-daemon", false, "foreground test mode: run -- CMD in its own process group and guard only that group (never used by the service)")
+		fs.StringVar(&testTier, "test-tier", "pause", "test daemon: pause, or kill (guardtest builds only)")
+	}
+	// For a test daemon, everything after -- is the job.
+	var job []string
+	hasJob := false
+	if !once {
+		for i, arg := range args {
+			if arg == "--" {
+				args, job, hasJob = args[:i], args[i+1:], true
+				break
+			}
+		}
 	}
 	if err := parse(fs, args); err != nil {
 		return err
 	}
+	if hasJob && !testDaemon {
+		return usageError{errors.New("run takes a job after -- only with --test-daemon")}
+	}
 	cfg := a.loadConfigOpts(testDaemon)
 	// A test daemon is refused before any side effect (lock, logs, state),
 	// so it can never touch the installed agent.
-	var target *resmon.TestTarget
+	var tier guard.Tier
 	if testDaemon {
 		if err := a.refuseInstalledPaths(); err != nil {
 			return err
 		}
-		t, err := testTarget(cfg, resources.New())
+		if len(job) == 0 {
+			return usageError{errors.New("--test-daemon needs a job to guard: run --test-daemon -- CMD [ARGS]")}
+		}
+		t, err := testJobTier(testTier)
 		if err != nil {
 			return err
 		}
-		target = t
+		tier = t
 	}
 	if !once {
 		// One monitor per log directory: two would double every event.
@@ -254,10 +274,19 @@ func (a *app) cmdRun(args []string, once bool) error {
 		defer unlock()
 		background()
 	}
-	col, _ := collector.New()
-	events, samples := a.writers(cfg)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	var target *resmon.TestTarget
+	var jobDone <-chan error
+	if testDaemon {
+		t, done, err := a.spawnTestJob(job, tier, stop)
+		if err != nil {
+			return err
+		}
+		target, jobDone = t, done
+	}
+	col, _ := collector.New()
+	events, samples := a.writers(cfg)
 	limiter := notify.New(cfg.Notify, time.Duration(cfg.NotifyCooldownS)*time.Second, col.Notify)
 	d := monitor.Deps{Cfg: cfg, Col: col, Events: events, Samples: samples,
 		Notify: limiter, Out: a.stdout, Errs: a.stderr, Version: version, Self: os.Getpid()}
@@ -280,6 +309,14 @@ func (a *app) cmdRun(args []string, once bool) error {
 		// Shutdown resumes every group the guard paused.
 		if rerr := <-resDone; err == nil {
 			err = rerr
+		}
+	}
+	if jobDone != nil {
+		select {
+		case jerr := <-jobDone:
+			fmt.Fprintf(a.stderr, "netwatch: test job exited: %v\n", exitText(jerr))
+		default:
+			fmt.Fprintf(a.stderr, "netwatch: test daemon stopped; test job group %d is still running and was resumed\n", target.PGID)
 		}
 	}
 	return err
