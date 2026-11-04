@@ -3,7 +3,7 @@ package darwin
 import (
 	"bytes"
 	"encoding/xml"
-	"path/filepath"
+	"path"
 	"strings"
 
 	"github.com/ericmacdougall/netwatch/internal/platform"
@@ -35,7 +35,7 @@ func RenderPlist(o platform.ServiceOptions) string {
 <key>LowPriorityIO</key><true/>
 <key>Nice</key><integer>10</integer>
 <key>StandardOutPath</key><string>/dev/null</string>
-<key>StandardErrorPath</key><string>` + xmlEscape(filepath.Join(o.LogDir, "stderr.log")) + `</string>
+<key>StandardErrorPath</key><string>` + xmlEscape(path.Join(o.LogDir, "stderr.log")) + `</string>
 </dict></plist>
 `
 }

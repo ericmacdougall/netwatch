@@ -49,8 +49,13 @@ func TestGatewayNetAndPing(t *testing.T) {
 	if !snap.HasIf {
 		t.Fatalf("no interface totals for %q", g.Iface)
 	}
+	// Loopback always answers, so IcmpSendEcho itself is checked even on
+	// hosted CI runners whose gateway drops ICMP.
+	if p := c.Ping(context.Background(), "127.0.0.1", 2); p.Avg == nil || p.Loss != 0 {
+		t.Fatalf("loopback did not answer: %+v", p)
+	}
 	if p := c.Ping(context.Background(), g.Addr, 2); p.Avg == nil {
-		t.Fatalf("gateway %s did not answer: %+v", g.Addr, p)
+		t.Logf("gateway %s did not answer ICMP: %+v", g.Addr, p)
 	}
 }
 
