@@ -50,6 +50,9 @@ type Call struct {
 	Redacted  string    `json:"command"` // redacted and truncated
 	SHA256    string    `json:"sha256"`  // of the exact command
 	Len       int       `json:"len"`     // bytes of the exact command
+	// Programs are the normalized names of the executables the command
+	// invokes (see programs.go); derived, not the command itself.
+	Programs []string `json:"programs,omitempty"`
 }
 
 // Config bounds one scan.
@@ -151,7 +154,8 @@ func ParseLine(line []byte) []Call {
 			continue
 		}
 		out = append(out, Call{At: at.UTC(), SessionID: strings.ToLower(l.SessionID), AgentID: agent, ToolUseID: safeID(it.ID),
-			Redacted: Redact(it.Input.Command), SHA256: Hash(it.Input.Command), Len: len(it.Input.Command)})
+			Redacted: Redact(it.Input.Command), SHA256: Hash(it.Input.Command), Len: len(it.Input.Command),
+			Programs: Programs(it.Input.Command)})
 	}
 	return out
 }
