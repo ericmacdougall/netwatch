@@ -16,7 +16,8 @@ import (
 // Opts bounds one read.
 type Opts struct {
 	Max          int64  // maximum bytes; reading Max+1 is an error
-	RequireOwner bool   // the file must belong to our uid
+	RequireOwner bool   // the file must belong to our uid (or OwnerUID)
+	OwnerUID     *int   // expected owner instead of ours (tests, delegated state)
 	MaxPerm      uint32 // if non-zero, mode&0777 must have no bits outside it
 }
 
@@ -64,8 +65,12 @@ func openRegular(path string, o Opts) (*os.File, os.FileInfo, error) {
 
 func checkOwnerPerm(fi os.FileInfo, o Opts) error {
 	if o.RequireOwner {
+		want := selfUID()
+		if o.OwnerUID != nil {
+			want = *o.OwnerUID
+		}
 		uid, ok := ownerUID(fi)
-		if !ok || uid != uint32(selfUID()) {
+		if !ok || uid != uint32(want) {
 			return ErrOwner
 		}
 	}
