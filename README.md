@@ -7,7 +7,7 @@ netwatch is a small background monitor for developer machines. It answers two qu
 
 netwatch never kills anything on its own. `netwatch orphans --kill` is opt-in, re-checks every process just before signalling it, and on macOS and Linux only sends `SIGTERM`.
 
-It runs on macOS, Linux and Windows as a single static binary with one dependency, [`golang.org/x/sys`](https://pkg.go.dev/golang.org/x/sys) (BSD-3-Clause, from the Go project). It uses about 0.1–0.3% of one CPU core and 10–20 MB of memory; see [Resource use](#resource-use).
+It runs on macOS, Linux and Windows as a single static binary with one dependency, [`golang.org/x/sys`](https://pkg.go.dev/golang.org/x/sys) (BSD-3-Clause, from the Go project). On a laptop it averages about 1% of one CPU core, including the helper commands it runs, and about 13 MB of memory; see [Resource use](#resource-use).
 
 ## Install
 
@@ -220,7 +220,17 @@ Each log file is rotated to `<name>.1` when it passes `max_log_mb`, and only one
 
 ## Resource use
 
-netwatch runs with lowered CPU and I/O priority on macOS and Linux (normal priority on Windows, where a below-normal monitor was starved for tens of seconds on a busy machine), and its `self` field in each sample records what it costs. On an Apple-silicon laptop over 30 minutes with default settings, netwatch plus its helpers averaged about 0.2% of one core, and netwatch's resident memory stayed under 20 MB. Run `netwatch report --since 1h` to see the figures for your machine.
+netwatch runs with lowered CPU and I/O priority on macOS and Linux (normal priority on Windows, where a below-normal monitor was starved for tens of seconds on a busy machine). Each sample's `self` field records what it costs, including the helper commands it starts, and `netwatch report` summarises it.
+
+Measured on an Apple M5 laptop (10 cores, macOS 26), with the installed LaunchAgent at default settings for 30 minutes, about 800 processes, and 1–4 MB/s of traffic:
+
+| | Average | Peak |
+|---|---|---|
+| netwatch process CPU (`ps` time) | 0.28% of one core | |
+| netwatch plus helpers (`self.cpu_pct`, 155 samples) | 1.16% of one core (about 0.12% of the machine) | 3.7% in a sample with a process scan |
+| Resident memory | | 13 MB |
+
+Most of the helper cost is the per-sample `nettop` (about 18 ms of CPU each); `ps` costs about 60 ms once a minute, and the two pings and `route` a few milliseconds each. On Windows the service's working set was about 15 MB. Run `netwatch report --since 1h` to see the figures for your machine.
 
 ## Development
 
