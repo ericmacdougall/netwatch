@@ -2,6 +2,7 @@ package resmon
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"sync"
 	"syscall"
@@ -227,7 +228,7 @@ func newHarness(t *testing.T, f *fake, mode guard.Mode, cls Classifier, tt *Test
 		View: guard.ReaderView{R: f}, Clock: f, Events: h.ev}
 	h.loop = New(Deps{R: f, Classifier: cls, Machine: h.m, Exec: exec,
 		Alerts: alerts.New(alerts.Config{}, nil, nil), Sampler: sampler.New(f, 5),
-		Resources: &h.out, Events: h.ev, Now: f.Now, TestTarget: tt})
+		Resources: lineAppender{&h.out}, Events: h.ev, Now: f.Now, TestTarget: tt})
 	return h
 }
 
@@ -365,4 +366,16 @@ func TestFailedScanIsPassedOnAsNotOK(t *testing.T) {
 	if len(h.loop.cls.Groups) != 1 {
 		t.Fatalf("failed scan dropped the last good classification")
 	}
+}
+
+// lineAppender writes each record as one JSON line, like eventlog.Writer.
+type lineAppender struct{ b *bytes.Buffer }
+
+func (a lineAppender) Append(rec any) error {
+	j, err := json.Marshal(rec)
+	if err != nil {
+		return err
+	}
+	a.b.Write(append(j, '\n'))
+	return nil
 }
