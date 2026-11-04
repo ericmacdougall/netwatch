@@ -121,13 +121,16 @@ func (e *Elig) label(out eligibility.Output) map[int]groupLabel {
 		k := labelKey{g.PGID, g.LeaderStart}
 		gl, ok := e.labels[k]
 		if !ok {
-			env := e.R.Env(g.PGID, "CLAUDE_CODE_SESSION_ID")
-			gl.session = env["CLAUDE_CODE_SESSION_ID"]
-			gl.label = e.Labeler.Label(gl.session, g.LeaderStart)
+			gl.session = e.groupSession(g.PGID)
 			if !sessionOK(gl.session) {
 				gl.session = ""
 			}
-			e.labels[k] = gl
+			gl.label = e.Labeler.Label(gl.session, g.LeaderStart)
+			if gl.session != "" {
+				// Cached only once known: the shell's first child may
+				// not exist yet on the first scan.
+				e.labels[k] = gl
+			}
 		}
 		if g.Agent == "" {
 			g.Agent = gl.label.Agent
@@ -135,6 +138,37 @@ func (e *Elig) label(out eligibility.Output) map[int]groupLabel {
 		byPGID[g.PGID] = gl
 	}
 	return byPGID
+}
+
+// maxEnvMembers bounds the environment reads for one group's session.
+const maxEnvMembers = 8
+
+// groupSession reads the session id from the group leader's environment,
+// then from other members. macOS hides the environment of Apple platform
+// binaries (/bin/zsh, /bin/bash, /bin/sleep) from other processes, so a
+// tool shell leader alone usually yields nothing there.
+func (e *Elig) groupSession(pgid int) string {
+	const key = "CLAUDE_CODE_SESSION_ID"
+	if v := e.R.Env(pgid, key)[key]; v != "" {
+		return v
+	}
+	members, err := e.R.GroupMembers(pgid)
+	if err != nil {
+		return ""
+	}
+	n := 0
+	for _, pid := range members {
+		if pid == pgid {
+			continue
+		}
+		if n++; n > maxEnvMembers {
+			break
+		}
+		if v := e.R.Env(pid, key)[key]; v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // sessionOK accepts only an id-shaped session value for the record.

@@ -49,7 +49,9 @@ func TestSampleRowsCarryAttribution(t *testing.T) {
 	f.procs[201] = &resources.Proc{PID: 201, PPID: 200, PGID: 200, SID: 200, UID: 501, Name: "python3", Exe: "/usr/bin/python3",
 		Start: shellStart.Add(50 * time.Millisecond), Footprint: 1 << 30, FootprintOK: true}
 	env := map[string]string{"CLAUDECODE": "1", "CLAUDE_PID": "100", "CLAUDE_CODE_SESSION_ID": "sess-1"}
-	rd := annFake{fake: f, env: map[int]map[string]string{200: env, 201: env},
+	// The leader is a platform shell whose environment macOS hides: only
+	// the python member's environment is readable.
+	rd := annFake{fake: f, env: map[int]map[string]string{201: env},
 		cwd: map[int]string{100: "/home/u/proj", 201: "/home/u/proj/sub", 90: "/home/u"}}
 
 	walRoot := t.TempDir()
