@@ -5,6 +5,7 @@ package windows
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -50,4 +51,15 @@ func TestGatewayNetAndPing(t *testing.T) {
 	if p := c.Ping(context.Background(), g.Addr, 2); p.Avg == nil {
 		t.Fatalf("gateway %s did not answer: %+v", g.Addr, p)
 	}
+}
+
+// TestNotifyScriptParses runs the toast script. Without an interactive
+// desktop (CI, ssh) the toast API itself may refuse, so only a PowerShell
+// parse error fails the test.
+func TestNotifyScriptParses(t *testing.T) {
+	err := New().Notify("test", "netwatch toast test")
+	if err != nil && strings.Contains(err.Error(), "ParserError") {
+		t.Fatalf("toast script does not parse: %v", err)
+	}
+	t.Logf("notify: %v", err)
 }

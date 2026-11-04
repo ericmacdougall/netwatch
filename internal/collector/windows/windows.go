@@ -4,7 +4,6 @@ package windows
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -15,7 +14,6 @@ import (
 	"strconv"
 	"sync"
 	"time"
-	"unicode/utf16"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -450,26 +448,23 @@ func (c *Collector) Terminate(p procscan.Process, force bool) error {
 	return nil
 }
 
-const toastScript = `$ErrorActionPreference='Stop'
-[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
-$t = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
-$n = $t.GetElementsByTagName('text')
-$n.Item(0).AppendChild($t.CreateTextNode($env:NETWATCH_TOAST_TITLE)) | Out-Null
-$n.Item(1).AppendChild($t.CreateTextNode($env:NETWATCH_TOAST_MSG)) | Out-Null
-$app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
+const toastScript = `$ErrorActionPreference='Stop';
+[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null;
+$t = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02);
+$n = $t.GetElementsByTagName('text');
+$n.Item(0).AppendChild($t.CreateTextNode($env:NETWATCH_TOAST_TITLE)) | Out-Null;
+$n.Item(1).AppendChild($t.CreateTextNode($env:NETWATCH_TOAST_MSG)) | Out-Null;
+$app = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe';
 [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($app).Show([Windows.UI.Notifications.ToastNotification]::new($t))`
 
 // Notify shows a toast through Windows PowerShell. The text travels in
-// environment variables, never in the script, so it cannot inject code.
+// environment variables, never in the script, so it cannot inject code. The
+// script is passed as plain -Command text rather than -EncodedCommand:
+// hidden, encoded PowerShell is a malware hallmark that antivirus heuristics
+// weigh heavily, and the script has nothing to hide.
 func (c *Collector) Notify(title, msg string) error {
-	u := utf16.Encode([]rune(toastScript))
-	b := make([]byte, 0, 2*len(u))
-	for _, r := range u {
-		b = append(b, byte(r), byte(r>>8))
-	}
 	_, err := execx.OutputEnv(context.Background(), 20*time.Second,
 		[]string{"NETWATCH_TOAST_TITLE=netwatch: " + title, "NETWATCH_TOAST_MSG=" + msg},
-		"powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
-		"-EncodedCommand", base64.StdEncoding.EncodeToString(b))
+		"powershell.exe", "-NoProfile", "-NonInteractive", "-Command", toastScript)
 	return err
 }
