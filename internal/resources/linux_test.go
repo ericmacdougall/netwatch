@@ -28,9 +28,19 @@ func TestLinuxLiveSelf(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { c.Process.Kill(); c.Wait() })
+	// Start returns after fork, possibly before or during exec: wait
+	// (bounded) until the child is sleep and its new environment reads.
+	// Mid-exec, the name and environment are still ours or unreadable.
 	var p Proc
-	if err := r.(*linuxReader).Probe(c.Process.Pid, &p); err != nil {
-		t.Fatal(err)
+	for deadline := time.Now().Add(2 * time.Second); ; {
+		if err := r.(*linuxReader).Probe(c.Process.Pid, &p); err != nil {
+			t.Fatal(err)
+		}
+		done := p.Name == "sleep" && len(r.Env(c.Process.Pid, "CLAUDECODE", "CLAUDE_PID")) == 2
+		if done || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	if p.PGID != c.Process.Pid || p.PPID != os.Getpid() || p.Name != "sleep" || !p.FootprintOK || p.Footprint == 0 || p.Footprint < p.RSS {
 		t.Fatalf("%+v", p)
