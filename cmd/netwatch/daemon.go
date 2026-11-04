@@ -142,17 +142,27 @@ func exitText(err error) string {
 	return err.Error()
 }
 
+// samePath reports whether x and y are lexically equal, or the same file
+// or directory reached another way (a symlink, or different letter case on
+// a case-insensitive volume).
+func samePath(x, y string) bool {
+	ax, err1 := filepath.Abs(x)
+	ay, err2 := filepath.Abs(y)
+	if err1 == nil && err2 == nil && filepath.Clean(ax) == filepath.Clean(ay) {
+		return true
+	}
+	fx, err1 := os.Stat(x)
+	fy, err2 := os.Stat(y)
+	return err1 == nil && err2 == nil && os.SameFile(fx, fy)
+}
+
 // refuseInstalledPaths keeps a test daemon away from the installed
 // agent's config, log directory and state.
 func (a *app) refuseInstalledPaths() error {
 	if !a.configFlagSet || !a.logDirFlagSet {
 		return errors.New("--test-daemon needs explicit --config and --log-dir")
 	}
-	same := func(x, y string) bool {
-		ax, err1 := filepath.Abs(x)
-		ay, err2 := filepath.Abs(y)
-		return err1 == nil && err2 == nil && filepath.Clean(ax) == filepath.Clean(ay)
-	}
+	same := samePath
 	if same(a.configPath, config.DefaultPath()) {
 		return errors.New("--test-daemon refuses the installed agent's config file")
 	}
@@ -195,7 +205,8 @@ func (a *app) startResources(ctx context.Context, d resourceDeps) (<-chan error,
 		loopR = testReader(r, stateDir)
 	}
 	exec := &guard.Executor{M: m, Sig: sig,
-		Store: &guard.FileStore{Path: stateFile}, View: guard.ReaderView{R: r}, Events: sink, Notify: d.notifier}
+		Store: &guard.FileStore{Path: stateFile}, View: guard.ReaderView{R: r}, Events: sink, Notify: d.notifier,
+		Requests: guard.DirRequests{Dir: stateDir}}
 
 	home, _ := os.UserHomeDir()
 	var labeler *attrib.Labeler

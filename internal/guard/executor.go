@@ -41,6 +41,8 @@ type Executor struct {
 	SlowFsync time.Duration
 	// Batch is the number of members signalled per fsync (cfg.BatchSize).
 	Batch int
+	// Requests are manual resumes filed by the CLI (optional).
+	Requests ResumeRequests
 
 	seq       atomic.Uint64
 	saveMu    sync.Mutex
@@ -405,26 +407,22 @@ func (m *Machine) pgidOf(key string) int {
 	return 0
 }
 
-// Reconcile drops records the CLI removed with netwatch resume, so the
-// daemon does not re-pause a group the user released. It compares the
-// machine with the file. Call it at the start of a poll, before Step.
+// Reconcile applies the manual resumes the CLI filed while the daemon
+// runs: each requested group still recorded is resumed by the daemon
+// itself and dropped. Call it at the start of a poll, before Step. (It
+// never infers a resume from a key missing from the state file: the CLI
+// does not write that file while the daemon runs.)
 func (e *Executor) Reconcile() error {
-	st, err := e.Store.Load()
-	if err != nil {
-		return err
+	if e.Requests == nil {
+		return nil
 	}
-	e.saveMu.Lock()
-	known := make(map[string]bool, len(e.persisted))
-	for k := range e.persisted {
-		known[k] = true
+	keys, err := e.Requests.Take()
+	var acts []Action
+	for _, k := range keys {
+		acts = append(acts, e.M.ResumeKey(k, e.now(), "manual resume")...)
 	}
-	e.saveMu.Unlock()
-	for _, k := range e.M.RecordKeys() {
-		// Only a record that an earlier save wrote can have been removed
-		// by the CLI; a brand-new one is simply not on disk yet.
-		if _, ok := st.Groups[k]; !ok && known[k] {
-			e.M.Forget(k, e.now())
-		}
+	if len(acts) > 0 {
+		e.Apply(acts)
 	}
-	return nil
+	return err
 }

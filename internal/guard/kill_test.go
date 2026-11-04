@@ -398,3 +398,18 @@ func TestPidReuseIsNeverSignalled(t *testing.T) {
 	must(t, !r3.w.procs[101].dead, "SIGKILL must not hit a reused pid")
 	must(t, !contains(r3.w.sigs(syscall.SIGKILL), 101), "SIGKILL sent to a reused pid")
 }
+
+// Code-inspection F2: a recorded member that is excluded now (it exec'd a
+// never-signal program after the pause) never gets the SIGKILL stage.
+func TestLiveMembersDropsNowExcludedRecordedPid(t *testing.T) {
+	m := NewMachine(DefaultConfig(ModePauseKill))
+	r := &Record{PGID: 100, Members: []RecMember{{PID: 100}, {PID: 101}, {PID: 102}}}
+	g := &gview{G: &Group{PGID: 100, Members: []Member{{PID: 100}, {PID: 101, Excluded: true}, {PID: 103}}}}
+	got := map[int]bool{}
+	for _, mem := range m.liveMembers(r, g) {
+		got[mem.PID] = true
+	}
+	if got[101] || !got[100] || !got[102] || !got[103] {
+		t.Fatalf("live members %v: want 100, 102 (recorded, gone from the view), 103 (new); never 101", got)
+	}
+}

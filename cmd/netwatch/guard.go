@@ -333,7 +333,12 @@ func (a *app) cmdResume(args []string) error {
 		fmt.Fprintf(a.stdout, "forced: leaving paused groups %v; stopped pids left behind: %v\n", rep.Live, rep.StoppedPIDs)
 		return nil
 	}
-	rep, err := guard.ManualResume(store, view, sig, time.Now(), pgid, *all)
+	req, unlock := resumeRequests(a.logDir)
+	defer unlock()
+	rep, err := guard.ManualResumeLive(store, view, sig, time.Now(), pgid, *all, req)
+	if req != nil && err == nil && len(rep.Resumed) > 0 {
+		fmt.Fprintln(a.stdout, "the running daemon drops these records on its next poll")
+	}
 	if len(rep.Pruned) > 0 {
 		fmt.Fprintf(a.stdout, "pruned dead or reused groups: %v\n", rep.Pruned)
 	}
@@ -386,7 +391,9 @@ func validateResumeArgs(all, check, force bool, rest []string) (int, error) {
 func resumeAllForUninstall(logDir string) error {
 	_, stateFile, _ := statePaths(logDir)
 	view, sig := resumeDeps()
-	_, err := guard.ManualResume(&guard.FileStore{Path: stateFile}, view, sig, time.Now(), 0, true)
+	req, unlock := resumeRequests(logDir)
+	defer unlock()
+	_, err := guard.ManualResumeLive(&guard.FileStore{Path: stateFile}, view, sig, time.Now(), 0, true, req)
 	if errors.Is(err, guard.ErrMissing) {
 		return nil
 	}
@@ -404,4 +411,17 @@ func (a *app) loadConfigOpts(testDaemon bool) *config.Config {
 		fmt.Fprintf(a.stderr, "netwatch: %v (%s); using defaults\n", err, a.configPath)
 	}
 	return &cfg
+}
+
+// resumeRequests decides how a manual resume reaches the guard state.
+// With the run lock free no daemon runs: the CLI holds the lock (so none
+// can start meanwhile) and updates the state file itself. Otherwise the
+// daemon owns the file, and the CLI files a request per group for it
+// (code-inspection F1: two writers lost each other's records).
+func resumeRequests(logDir string) (guard.ResumeRequests, func()) {
+	if unlock, err := lockRun(filepath.Join(logDir, "run.lock")); err == nil {
+		return nil, unlock
+	}
+	stateDir, _, _ := statePaths(logDir)
+	return guard.DirRequests{Dir: stateDir}, func() {}
 }
