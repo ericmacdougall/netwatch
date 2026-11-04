@@ -13,10 +13,14 @@ import (
 // the Bash tool_use calls with a timestamp in [T-60s, T+2s] are candidates.
 // They are ordered by, in turn:
 //
-//  1. name match: a call whose command invokes a program whose normalized
-//     name equals the process name (case-insensitive, version suffix
-//     stripped, so python3.12 matches Python; interpreter -m modules and
-//     scripts count, see transcript.Programs) ranks above calls that do not;
+//  1. name match, strong then weak then none. Strong: the command invokes a
+//     program whose normalized name equals the process name
+//     (case-insensitive, version suffix stripped, so python3.12 matches
+//     Python; interpreter -m modules and scripts count, see
+//     transcript.Programs). Weak: a standalone argument (unquoted, not a
+//     flag) has that normalized base name, which covers exec-through
+//     wrappers such as `perl -e '...exec @ARGV' python3` or `xargs python3`
+//     without listing them, and also a file merely named like the process;
 //  2. adjusted distance |T - At|, plus 5s for a call after T. Tool_use
 //     timestamps are written before execution, so a call at or before T is
 //     the more plausible parent; calls up to 2s after T stay eligible for
@@ -39,6 +43,7 @@ const (
 type Candidate struct {
 	Rank       int           `json:"rank"`
 	NameMatch  bool          `json:"name_match"`
+	MatchKind  string        `json:"match_kind"` // strong, weak or none
 	Confidence string        `json:"confidence"`
 	At         time.Time     `json:"at"`
 	Before     time.Duration `json:"before_start_ns"` // T - At; negative if the call is after T
@@ -67,26 +72,44 @@ func abs(d time.Duration) time.Duration {
 	return d
 }
 
-func nameMatches(c transcript.Call, want string) bool {
+// Match tiers.
+const (
+	matchNone   = 0
+	matchWeak   = 1
+	matchStrong = 2
+)
+
+var matchKinds = [...]string{"none", "weak", "strong"}
+
+// matchTier is strong when the command invokes the program, weak when a
+// standalone argument has that name, none otherwise.
+func matchTier(c transcript.Call, want string) int {
 	if want == "" {
-		return false
+		return matchNone
 	}
 	for _, p := range c.Programs {
 		if p == want {
-			return true
+			return matchStrong
 		}
 	}
-	return false
+	for _, a := range c.ArgNames {
+		if a == want {
+			return matchWeak
+		}
+	}
+	return matchNone
 }
+
+func nameMatches(c transcript.Call, want string) bool { return matchTier(c, want) != matchNone }
 
 // RankCandidates implements the rule above for a process named process. It
 // returns at most five candidates.
 func RankCandidates(calls []transcript.Call, start time.Time, process string) []Candidate {
 	want := transcript.NormalizeName(process)
 	type scored struct {
-		c     transcript.Call
-		match bool
-		dist  time.Duration
+		c    transcript.Call
+		tier int
+		dist time.Duration
 	}
 	var in []scored
 	matches := 0
@@ -95,18 +118,18 @@ func RankCandidates(calls []transcript.Call, start time.Time, process string) []
 		if d < -CandidateAfter || d > CandidateBefore {
 			continue
 		}
-		s := scored{c: c, match: nameMatches(c, want), dist: abs(d)}
+		s := scored{c: c, tier: matchTier(c, want), dist: abs(d)}
 		if d < 0 {
 			s.dist += afterPenalty
 		}
-		if s.match {
+		if s.tier != matchNone {
 			matches++
 		}
 		in = append(in, s)
 	}
 	sort.SliceStable(in, func(i, j int) bool {
-		if in[i].match != in[j].match {
-			return in[i].match
+		if in[i].tier != in[j].tier {
+			return in[i].tier > in[j].tier
 		}
 		return in[i].dist < in[j].dist
 	})
@@ -116,11 +139,24 @@ func RankCandidates(calls []transcript.Call, start time.Time, process string) []
 			break
 		}
 		conf := "low"
-		if i == 0 && matches == 1 {
+		if i == 0 && matches == 1 && s.tier != matchNone {
 			conf = "medium"
 		}
-		out = append(out, Candidate{Rank: i + 1, NameMatch: s.match, Confidence: conf, At: s.c.At, Before: start.Sub(s.c.At),
+		out = append(out, Candidate{Rank: i + 1, NameMatch: s.tier != matchNone, MatchKind: matchKinds[s.tier], Confidence: conf, At: s.c.At, Before: start.Sub(s.c.At),
 			SessionID: s.c.SessionID, AgentID: s.c.AgentID, Command: s.c.Redacted, SHA256: s.c.SHA256})
 	}
 	return out
+}
+
+// CountMatches is the number of calls in the window whose name matches
+// strongly or weakly; RankCandidates returns at most five of them.
+func CountMatches(calls []transcript.Call, start time.Time, process string) int {
+	want := transcript.NormalizeName(process)
+	n := 0
+	for _, c := range calls {
+		if d := start.Sub(c.At); d >= -CandidateAfter && d <= CandidateBefore && matchTier(c, want) != matchNone {
+			n++
+		}
+	}
+	return n
 }

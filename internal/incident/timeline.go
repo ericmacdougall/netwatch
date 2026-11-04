@@ -91,6 +91,8 @@ type Report struct {
 	// Candidates are the transcript Bash calls that may have started the
 	// culprit, best first (see candidates.go for the rule).
 	Candidates []Candidate `json:"candidates,omitempty"`
+	// NameMatches counts every strong or weak name match in the window.
+	NameMatches int `json:"name_matches,omitempty"`
 }
 
 // Options says where to look.
@@ -250,7 +252,7 @@ func (r *Report) Render(w io.Writer) {
 		}
 	}
 	for _, c := range r.Candidates {
-		fmt.Fprintf(w, "Candidate %d (%s, name match %v): %s at %s, %s before the start, %s\n    %s\n", c.Rank, c.Confidence, c.NameMatch, c.Label(),
+		fmt.Fprintf(w, "Candidate %d (%s, %s match): %s at %s, %s before the start, %s\n    %s\n", c.Rank, c.Confidence, c.MatchKind, c.Label(),
 			c.At.UTC().Format("15:04:05.0Z"), c.Before.Round(100*time.Millisecond), "sha256 "+c.SHA256[:12], c.Command)
 	}
 	for _, s := range r.Skipped {
@@ -347,6 +349,7 @@ func (r *Report) rankTranscripts(o Options) {
 		return
 	}
 	r.Candidates = RankCandidates(calls, r.Estimate.Start, r.Estimate.Process)
+	r.NameMatches = CountMatches(calls, r.Estimate.Start, r.Estimate.Process)
 	if len(r.Candidates) == 0 {
 		r.Notes = append(r.Notes, fmt.Sprintf("no Bash tool call within [-60s, +2s] of the start (%d transcript files read): attribution unknown", st.FilesRead))
 	}

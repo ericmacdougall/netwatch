@@ -23,6 +23,7 @@ import (
 
 const (
 	maxPrograms  = 24
+	maxArgNames  = 48
 	maxProgDepth = 2
 )
 
@@ -66,21 +67,45 @@ func Programs(cmd string) []string {
 			seen[n] = true
 			out = append(out, n)
 		}
+	}, func(string) {})
+	return out
+}
+
+// ArgNames returns the normalized base names of standalone arguments (not
+// inside quotes, not flags, not assignments) of the commands in cmd. A name
+// here that equals a process name is a "weak" match: it may be a program
+// exec'd through a wrapper, or just a file with that name.
+func ArgNames(cmd string) []string {
+	var out []string
+	seen := map[string]bool{}
+	collect(cmd, 0, func(string) {}, func(n string) {
+		n = NormalizeName(n)
+		if n != "" && !seen[n] && len(out) < maxArgNames {
+			seen[n] = true
+			out = append(out, n)
+		}
 	})
 	return out
 }
 
 // splitSegments tokenizes cmd into segments of words, honouring quotes.
-func splitSegments(cmd string) [][]string {
-	var segs [][]string
-	var words []string
+// word is one shell word; q is set when any part of it was quoted or
+// escaped, which makes it not a standalone token.
+type word struct {
+	s string
+	q bool
+}
+
+func splitSegments(cmd string) [][]word {
+	var segs [][]word
+	var words []word
 	var cur strings.Builder
-	inWord := false
+	inWord, quoted := false, false
 	flushWord := func() {
 		if inWord {
-			words = append(words, cur.String())
+			words = append(words, word{cur.String(), quoted})
 			cur.Reset()
-			inWord = false
+			inWord, quoted = false, false
 		}
 	}
 	flushSeg := func() {
@@ -94,7 +119,7 @@ func splitSegments(cmd string) [][]string {
 		c := cmd[i]
 		switch c {
 		case '\'':
-			inWord = true
+			inWord, quoted = true, true
 			j := strings.IndexByte(cmd[i+1:], '\'')
 			if j < 0 {
 				cur.WriteString(cmd[i+1:])
@@ -104,7 +129,7 @@ func splitSegments(cmd string) [][]string {
 				i += j + 1
 			}
 		case '"':
-			inWord = true
+			inWord, quoted = true, true
 			i++
 			for i < len(cmd) && cmd[i] != '"' {
 				if cmd[i] == '\\' && i+1 < len(cmd) {
@@ -114,7 +139,7 @@ func splitSegments(cmd string) [][]string {
 				i++
 			}
 		case '\\':
-			inWord = true
+			inWord, quoted = true, true
 			if i+1 < len(cmd) {
 				i++
 				cur.WriteByte(cmd[i])
@@ -132,8 +157,12 @@ func splitSegments(cmd string) [][]string {
 	return segs
 }
 
-func collect(cmd string, depth int, add func(string)) {
-	for _, words := range splitSegments(cmd) {
+func collect(cmd string, depth int, add, arg func(string)) {
+	for _, seg := range splitSegments(cmd) {
+		words := make([]string, len(seg))
+		for k, w := range seg {
+			words[k] = w.s
+		}
 		i := 0
 		for i < len(words) {
 			w := words[i]
@@ -153,6 +182,15 @@ func collect(cmd string, depth int, add func(string)) {
 			continue
 		}
 		add(prog)
+		// Weak names: standalone (unquoted) arguments after the program, so
+		// exec-through wrappers (perl -e '...exec @ARGV' python3, xargs
+		// python3) are visible without listing each wrapper.
+		for _, w := range seg[i+1:] {
+			if w.q || w.s == "" || strings.HasPrefix(w.s, "-") || strings.HasPrefix(w.s, "$") || assignRE.MatchString(w.s) {
+				continue
+			}
+			arg(path.Base(w.s))
+		}
 		np := NormalizeName(prog)
 		if !interpreters[np] {
 			continue
@@ -166,7 +204,7 @@ func collect(cmd string, depth int, add func(string)) {
 				k = len(rest)
 			case a == "-c" && shells[np] && k+1 < len(rest):
 				if depth < maxProgDepth {
-					collect(rest[k+1], depth+1, add)
+					collect(rest[k+1], depth+1, add, arg)
 				}
 				k = len(rest)
 			case strings.HasPrefix(a, "-"):
