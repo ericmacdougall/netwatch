@@ -406,9 +406,12 @@ func TestResumeWhileDaemonRunsFilesRequest(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stateDir, "keep.json"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	req, unlock, err := resumeRequests(logDir)
+	req, pending, unlock, err := resumeRequests(logDir)
 	if err != nil || req != nil {
 		t.Fatalf("no daemon: the CLI must write the state itself (%v)", err)
+	}
+	if len(pending) != 1 || pending[0] != "pg:7:1" {
+		t.Fatalf("an untaken request must be handed back to apply, got %v", pending)
 	}
 	if ents, _ := os.ReadDir(stateDir); len(ents) != 1 || ents[0].Name() != "keep.json" {
 		t.Fatalf("stale requests not swept (or other files touched): %v", ents)
@@ -420,7 +423,7 @@ func TestResumeWhileDaemonRunsFilesRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer hold()
-	req, unlock, err = resumeRequests(logDir)
+	req, _, unlock, err = resumeRequests(logDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -445,7 +448,7 @@ func TestResumeLockErrorIsNotADaemon(t *testing.T) {
 	if err := os.WriteFile(logDir, nil, 0o600); err != nil { // a file, not a directory
 		t.Fatal(err)
 	}
-	if req, _, err := resumeRequests(logDir); err == nil || req != nil {
+	if req, _, _, err := resumeRequests(logDir); err == nil || req != nil {
 		t.Fatalf("want an error, got req=%v err=%v", req, err)
 	}
 }
@@ -487,5 +490,43 @@ func TestDaemonGuardConfigNoKillOnMac(t *testing.T) {
 	}
 	if daemonGuardConfig(&cfg, guard.ModePauseKill, "linux").NoKill {
 		t.Fatal("linux pause+kill must keep kill")
+	}
+}
+
+// Code-inspection r4 F1: the daemon crashes after the user's resume of
+// group 100 was filed as a request. A later `resume 200` with the lock
+// free must apply that request too (record dropped, group held), not
+// throw it away for a restarted daemon to stop the group again.
+func TestResumeAfterDaemonCrashAppliesPendingRequest(t *testing.T) {
+	a, _, _ := newTestApp(t)
+	f := &fakeProcs{alive: map[int]time.Time{100: tt0, 200: tt0}}
+	withFake(t, f)
+	stateDir, stateFile, _ := statePaths(a.logDir)
+	st := guard.State{Groups: map[string]*guard.Record{}, LastResume: map[string]time.Time{},
+		Episode: &guard.Episode{}}
+	for _, pg := range []int{100, 200} {
+		r := &guard.Record{PGID: pg, LeaderStart: tt0, Phase: guard.PhasePaused, PausedAt: tt0,
+			Members: []guard.RecMember{{PID: pg, Start: tt0, Sig: true}}}
+		st.Groups[r.Key()] = r
+	}
+	if _, err := (&guard.FileStore{Path: stateFile}).Save(st); err != nil {
+		t.Fatal(err)
+	}
+	k100 := (&guard.Record{PGID: 100, LeaderStart: tt0}).Key()
+	if err := (guard.DirRequests{Dir: stateDir}).Add(k100); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.cmdResume([]string{"200"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := (&guard.FileStore{Path: stateFile}).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Groups) != 0 || got.Episode == nil || !got.Episode.Held[k100] {
+		t.Fatalf("pending resume of 100 lost: groups=%v episode=%+v", got.Groups, got.Episode)
+	}
+	if ents, _ := os.ReadDir(stateDir); len(ents) != 1 { // only the state file
+		t.Fatalf("request files left: %v", ents)
 	}
 }

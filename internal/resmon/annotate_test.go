@@ -18,11 +18,15 @@ import (
 // annFake adds environments and working directories to the fake reader.
 type annFake struct {
 	*fake
-	env map[int]map[string]string
-	cwd map[int]string
+	env   map[int]map[string]string
+	cwd   map[int]string
+	reads *int
 }
 
 func (a annFake) Env(pid int, keys ...string) map[string]string {
+	if a.reads != nil {
+		*a.reads++
+	}
 	out := map[string]string{}
 	for _, k := range keys {
 		if v, ok := a.env[pid][k]; ok {
@@ -171,5 +175,36 @@ func TestAlertSeriesAndWhoNameTheJob(t *testing.T) {
 	who := e.whoFunc(scan, map[int]groupLabel{200: {label: attrib.Label{Agent: "agent:abc", Confidence: 0.9}}})
 	if app, agent := who(scan[1]); app != ClaudeOwner || agent != "agent:abc" {
 		t.Fatalf("who: %q %q", app, agent)
+	}
+}
+
+// A group whose session cannot be read is looked up on a bounded number
+// of scans, then "unknown" is cached (code-inspection r4 F2).
+func TestUnknownSessionIsNotReadEveryScan(t *testing.T) {
+	const claudeExe = "/home/u/.local/share/claude/versions/2.1.318"
+	f := newFake()
+	f.procs[1] = &resources.Proc{PID: 1, Name: "launchd", Exe: "/sbin/launchd", Start: t0.Add(-time.Hour), FootprintOK: true}
+	f.procs[100] = &resources.Proc{PID: 100, PPID: 1, PGID: 100, SID: 100, UID: 501, Exe: claudeExe, Start: t0.Add(-time.Hour), FootprintOK: true}
+	f.procs[200] = &resources.Proc{PID: 200, PPID: 100, PGID: 200, SID: 200, UID: 501, Exe: "/bin/zsh", Start: t0.Add(-time.Minute), FootprintOK: true}
+	f.procs[201] = &resources.Proc{PID: 201, PPID: 200, PGID: 200, SID: 200, UID: 501, Exe: "/bin/sleep", Start: t0.Add(-time.Minute), FootprintOK: true}
+	n := 0
+	rd := annFake{fake: f, env: map[int]map[string]string{}, reads: &n}
+	scan, _ := f.Procs()
+	recs := []watcher.Record{{PID: 200, Start: f.procs[200].Start, ClaudePID: 100, ClaudeStart: f.procs[100].Start,
+		State: watcher.Classified, Exe: "/bin/zsh", FirstSeen: t0}}
+	e := &Elig{R: rd, SelfPID: 9999, UID: 501, Labeler: &attrib.Labeler{FS: attrib.DirReader{Root: t.TempDir()}}}
+	var perScan []int
+	for i := 0; i < 6; i++ {
+		before := n
+		cls := e.Classify(scan, recs, nil)
+		if i == 0 && len(cls.Groups) == 0 {
+			t.Fatal("setup: no group")
+		}
+		perScan = append(perScan, n-before)
+	}
+	// Eligibility reads environments every scan; the session lookup adds
+	// reads only on the first sessionTries scans.
+	if perScan[0] <= perScan[5] || perScan[sessionTries] != perScan[5] {
+		t.Fatalf("env reads per scan %v: the session lookup must stop after %d scans", perScan, sessionTries)
 	}
 }

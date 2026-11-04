@@ -265,3 +265,14 @@ func TestLabelFindsRecentAgentAmongManyFiles(t *testing.T) {
 		t.Fatalf("recent agent file not read: %+v", got)
 	}
 }
+
+// An agent_id that is not an id is never copied into a label.
+func TestLabelRejectsMalformedAgentID(t *testing.T) {
+	root := t.TempDir()
+	base := time.Date(2026, 11, 4, 17, 0, 0, 0, time.UTC)
+	writeWAL(t, root, "s", "main.jsonl", walLine(base, "bad id/../x"))
+	l := &Labeler{FS: DirReader{Root: root}}
+	if got := l.Label("s", base.Add(100*time.Millisecond)); got.Agent != "" {
+		t.Fatalf("malformed agent id labelled: %+v", got)
+	}
+}

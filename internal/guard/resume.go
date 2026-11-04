@@ -62,6 +62,20 @@ func ManualResume(store Store, view ProcView, sig Signaller, now time.Time, pgid
 // group so the daemon drops the record and resumes any member it stopped
 // since.
 func ManualResumeLive(store Store, view ProcView, sig Signaller, now time.Time, pgid int, all bool, req ResumeRequests) (ResumeReport, error) {
+	return manualResume(store, view, sig, now, pgid, all, req, nil)
+}
+
+// ManualResumeApplying is the no-daemon case (the caller holds the run
+// lock) that first applies pending: resume requests a daemon filed for
+// but never took, for example because it crashed. They are the user's
+// earlier resumes, keyed by leader start time, so they can only match the
+// same groups; dropping them would let a restarted daemon stop those
+// groups again.
+func ManualResumeApplying(store Store, view ProcView, sig Signaller, now time.Time, pgid int, all bool, pending []string) (ResumeReport, error) {
+	return manualResume(store, view, sig, now, pgid, all, nil, pending)
+}
+
+func manualResume(store Store, view ProcView, sig Signaller, now time.Time, pgid int, all bool, req ResumeRequests, pending []string) (ResumeReport, error) {
 	var rep ResumeReport
 	st, err := store.Load()
 	if err != nil {
@@ -69,6 +83,18 @@ func ManualResumeLive(store Store, view ProcView, sig Signaller, now time.Time, 
 	}
 	st.init()
 	rep.Pruned = prune(&st, view)
+	dirty := len(rep.Pruned) > 0
+	applied := map[int]bool{}
+	if req == nil {
+		for _, k := range pending {
+			if r, ok := st.Groups[k]; ok {
+				resumeMembers(r, sig, &rep)
+				release(&st, r, now)
+				applied[r.PGID] = true
+				dirty = true
+			}
+		}
+	}
 	var targets []*Record
 	if all {
 		targets = st.sortedRecords()
@@ -78,23 +104,18 @@ func ManualResumeLive(store Store, view ProcView, sig Signaller, now time.Time, 
 				targets = append(targets, r)
 			}
 		}
-		if len(targets) == 0 {
-			if len(rep.Pruned) > 0 && req == nil {
+		if len(targets) == 0 && !applied[pgid] {
+			if dirty && req == nil {
 				store.Save(st)
 			}
 			return rep, fmt.Errorf("%w: pgid %d", ErrNotRecorded, pgid)
 		}
 	}
+	for pg := range applied {
+		rep.Resumed = append(rep.Resumed, pg)
+	}
 	for _, r := range targets {
-		leader, rest := orderMembers(r.PGID, recMembers(r))
-		n := 0
-		for _, m := range append(leader, rest...) {
-			if err := sig.Signal(m.PID, m.Start, sigCONT); err == nil {
-				n++
-			} else if !errors.Is(err, ErrStartMismatch) {
-				rep.Skipped = append(rep.Skipped, fmt.Sprintf("pid %d: %v", m.PID, err))
-			}
-		}
+		resumeMembers(r, sig, &rep)
 		rep.Resumed = append(rep.Resumed, r.PGID)
 		if req != nil {
 			if err := req.Add(r.Key()); err != nil {
@@ -102,16 +123,7 @@ func ManualResumeLive(store Store, view ProcView, sig Signaller, now time.Time, 
 			}
 			continue
 		}
-		delete(st.Groups, r.Key())
-		st.LastResume[r.Key()] = now
-		if st.Episode != nil {
-			// Same hold as the daemon's ResumeKey: a daemon that starts
-			// during this episode must not pause the group again.
-			if st.Episode.Held == nil {
-				st.Episode.Held = map[string]bool{}
-			}
-			st.Episode.Held[r.Key()] = true
-		}
+		release(&st, r, now)
 	}
 	sort.Ints(rep.Resumed)
 	if req != nil {
@@ -121,6 +133,30 @@ func ManualResumeLive(store Store, view ProcView, sig Signaller, now time.Time, 
 		return rep, err
 	}
 	return rep, nil
+}
+
+// resumeMembers sends SIGCONT to every recorded member, leader first.
+func resumeMembers(r *Record, sig Signaller, rep *ResumeReport) {
+	leader, rest := orderMembers(r.PGID, recMembers(r))
+	for _, m := range append(leader, rest...) {
+		if err := sig.Signal(m.PID, m.Start, sigCONT); err != nil && !errors.Is(err, ErrStartMismatch) {
+			rep.Skipped = append(rep.Skipped, fmt.Sprintf("pid %d: %v", m.PID, err))
+		}
+	}
+}
+
+// release drops the record of a group the user resumed and holds it for
+// the rest of the episode: the same effect as the daemon's ResumeKey, so
+// a daemon that starts during this episode does not pause it again.
+func release(st *State, r *Record, now time.Time) {
+	delete(st.Groups, r.Key())
+	st.LastResume[r.Key()] = now
+	if st.Episode != nil {
+		if st.Episode.Held == nil {
+			st.Episode.Held = map[string]bool{}
+		}
+		st.Episode.Held[r.Key()] = true
+	}
 }
 
 func recMembers(r *Record) []Member {

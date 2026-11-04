@@ -43,7 +43,13 @@ const ClaudeOwner = "Claude Code"
 type groupLabel struct {
 	label   attrib.Label
 	session string
+	tries   int // scans that looked for the session
 }
+
+// sessionTries bounds how many scans look for a group's session before
+// "unknown" is cached (a job made only of macOS system binaries never
+// shows one; its first child may appear a scan or two late).
+const sessionTries = 3
 
 type labelKey struct {
 	pgid  int
@@ -120,17 +126,14 @@ func (e *Elig) label(out eligibility.Output) map[int]groupLabel {
 		g := &out.Groups[i]
 		k := labelKey{g.PGID, g.LeaderStart}
 		gl, ok := e.labels[k]
-		if !ok {
+		if !ok || (gl.session == "" && gl.tries < sessionTries) {
 			gl.session = e.groupSession(g.PGID)
 			if !sessionOK(gl.session) {
 				gl.session = ""
 			}
 			gl.label = e.Labeler.Label(gl.session, g.LeaderStart)
-			if gl.session != "" {
-				// Cached only once known: the shell's first child may
-				// not exist yet on the first scan.
-				e.labels[k] = gl
-			}
+			gl.tries++
+			e.labels[k] = gl
 		}
 		if g.Agent == "" {
 			g.Agent = gl.label.Agent
