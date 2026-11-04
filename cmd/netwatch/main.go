@@ -48,6 +48,11 @@ Commands:
                            close, or TerminateProcess with --force)
   tail [-n N] [--no-follow]
                            print recent events and follow new ones
+  top [--mem|--cpu] [-n N] [--json]
+                           largest processes by memory footprint or CPU
+  incident [--last] [--json] [--since D] [--dir DIR] [--replay-guard]
+                           join jetsam and reset reports with netwatch's
+                           samples, events and candidate tool calls
   install [--label NAME]   register the per-user background service
   uninstall [--label NAME] remove it
   status [--label NAME]    show service and log status
@@ -123,6 +128,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = a.cmdOrphans(args)
 	case "tail":
 		err = a.cmdTail(args)
+	case "top":
+		err = a.cmdTop(args)
+	case "incident":
+		err = a.cmdIncident(args)
 	case "install", "uninstall", "status":
 		err = a.cmdService(cmd, args)
 	case "config":
