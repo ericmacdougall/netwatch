@@ -65,6 +65,8 @@ type state struct {
 	runaway  *procscan.RunawayTracker
 	orphans  map[identity]bool
 	lastScan time.Time
+	lastNet  time.Time     // last per-process traffic sample
+	rates    netrate.Rates // from that sample, carried into skipped cycles
 	meter    *selfusage.Meter
 	selfRSS  float64
 	errSeen  map[string]time.Time
@@ -112,6 +114,9 @@ func Run(ctx context.Context, d Deps, once bool) error {
 	}
 }
 
+// errSkipped marks a cycle that reused the previous traffic sample.
+var errSkipped = errors.New("traffic sample skipped this cycle")
+
 func (s *state) cycle(ctx context.Context, once bool) {
 	cfg, col := s.d.Cfg, s.d.Col
 	gw, err := col.Gateway(ctx)
@@ -132,14 +137,31 @@ func (s *state) cycle(ctx context.Context, once bool) {
 		return
 	}
 
-	cur, err := col.Net(ctx, gw.Iface)
-	s.logErr("net", err)
-	var rates netrate.Rates
-	if err == nil {
-		if s.havePrev {
-			rates = netrate.Compute(s.prev, cur)
+	// Per-process traffic (nettop on macOS) is the most expensive part of
+	// a cycle, so while the network is healthy it is sampled every
+	// net_every seconds and the last rates are carried forward. When pings
+	// look bad, or the state is degraded, it is sampled every cycle so a
+	// DEGRADED event names the current top talkers.
+	th := health.Thresholds{GatewayMs: cfg.DegradedGwMs, LossPct: cfg.DegradedLossPct}
+	measure := once || s.health.Degraded || health.Bad(hGW, hNet, th) ||
+		s.d.Now().Sub(s.lastNet) >= time.Duration(cfg.NetEvery)*time.Second
+	var cur netrate.Snapshot
+	err = errSkipped
+	if measure {
+		s.lastNet = s.d.Now()
+		cur, err = col.Net(ctx, gw.Iface)
+		s.logErr("net", err)
+		if err == nil {
+			s.rates = netrate.Rates{}
+			if s.havePrev {
+				s.rates = netrate.Compute(s.prev, cur)
+			}
+			s.prev, s.havePrev = cur, true
 		}
-		s.prev, s.havePrev = cur, true
+	}
+	rates := s.rates
+	if err != nil {
+		cur.HasBytes = s.prev.HasBytes // for the interface-total fallback below
 	}
 	top := talkers(rates, cfg.TopN)
 	inK, outK := math.Round(rates.InKBps), math.Round(rates.OutKBps)
@@ -184,7 +206,6 @@ func (s *state) cycle(ctx context.Context, once bool) {
 		}
 	}
 
-	th := health.Thresholds{GatewayMs: cfg.DegradedGwMs, LossPct: cfg.DegradedLossPct}
 	switch s.health.Update(hGW, hNet, th) {
 	case health.BecameDegraded:
 		s.emit(record.Event{Event: record.Degraded, Iface: gw.Iface, GW: hGW, Net: hNet,

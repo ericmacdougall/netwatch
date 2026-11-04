@@ -26,6 +26,7 @@ const EnvLogDir = "NETWATCH_LOG_DIR"
 type Config struct {
 	Interval           int      `json:"interval"`             // seconds between network samples
 	OrphanEvery        int      `json:"orphan_every"`         // seconds between process scans
+	NetEvery           int      `json:"net_every"`            // seconds between per-process traffic samples while healthy
 	InternetHost       string   `json:"internet_host"`        // host pinged for internet health
 	DegradedGwMs       float64  `json:"degraded_gw_ms"`       // avg gateway RTT considered bad
 	DegradedLossPct    float64  `json:"degraded_loss_pct"`    // packet loss considered bad
@@ -93,6 +94,7 @@ func Default() Config {
 	return Config{
 		Interval:        10,
 		OrphanEvery:     60,
+		NetEvery:        30,
 		InternetHost:    "1.1.1.1",
 		DegradedGwMs:    40,
 		DegradedLossPct: 10,
@@ -198,6 +200,7 @@ func (c *Config) validate() []string {
 	}
 	clampInt("interval", &c.Interval, 1, d.Interval)
 	clampInt("orphan_every", &c.OrphanEvery, 1, d.OrphanEvery)
+	clampInt("net_every", &c.NetEvery, 1, d.NetEvery)
 	clampInt("top_n", &c.TopN, 1, d.TopN)
 	clampInt("runaway_scans", &c.RunawayScans, 1, d.RunawayScans)
 	clampInt("runaway_rss_mb", &c.RunawayRSSMB, 1, d.RunawayRSSMB)

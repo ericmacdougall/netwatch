@@ -147,6 +147,7 @@ The file only needs the keys you change. A missing file means all defaults. Unkn
 {
   "interval": 10,
   "orphan_every": 60,
+  "net_every": 30,
   "internet_host": "1.1.1.1",
   "degraded_gw_ms": 40,
   "degraded_loss_pct": 10,
@@ -166,6 +167,7 @@ The file only needs the keys you change. A missing file means all defaults. Unkn
 
 - `watch_patterns` and `orphan_ignore` are regular expressions ([RE2 syntax](https://github.com/google/re2/wiki/Syntax)) matched against the full command line. On Windows, the program path is matched with forward slashes and without `.exe`, so `(^|/)node( |$)` matches `C:/Program Files/nodejs/node`.
 - Setting either list replaces the built-in defaults. Use `watch_patterns_extra` and `orphan_ignore_extra` to add patterns instead.
+- `net_every` is how often per-process traffic is sampled while the network is healthy. It is the main CPU cost on macOS; lower it for faster `NEW_NET_APP` detection.
 - `--log-dir DIR` or `NETWATCH_LOG_DIR` changes where logs go.
 - `netwatch install` records `--config` and `--log-dir` in the service definition when you pass them, or when the matching environment variables are set.
 
@@ -190,7 +192,7 @@ Each log file is rotated to `<name>.1` when it passes `max_log_mb`, and only one
 
 ### macOS
 
-- Per-process bytes come from one `nettop -n` sample per interval. `-n` (no reverse DNS) matters: without it `nettop` took 30 seconds per sample on a machine with slow DNS. `nettop` truncates process names to about 15 characters, and that is the name `NEW_NET_APP` and the talkers list show.
+- Per-process bytes come from one `nettop -n` sample every `net_every` seconds (30 by default) while the network is healthy, and every interval while pings look bad, so `DEGRADED` names the current top talkers. Samples in between repeat the last traffic figures. `-n` (no reverse DNS) matters: without it `nettop` took 30 seconds per sample on a machine with slow DNS. `nettop` truncates process names to about 15 characters, and that is the name `NEW_NET_APP` and the talkers list show.
 - An installed browser's `chrome_crashpad_handler` always detaches to `launchd`, so it is ignored by default. Handlers from Playwright or Puppeteer browser caches are still reported.
 - Processes are read with `ps`. `ps` CPU is a decaying average, not an exact per-interval figure.
 - Only IPv4 default routes are used to find the gateway.

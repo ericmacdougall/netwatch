@@ -18,19 +18,22 @@ import (
 	"github.com/ericmacdougall/netwatch/internal/notify"
 	"github.com/ericmacdougall/netwatch/internal/procscan"
 	"github.com/ericmacdougall/netwatch/internal/record"
+	"github.com/ericmacdougall/netwatch/internal/selfusage"
 )
 
 type fakeCollector struct {
-	mu    sync.Mutex
-	nets  []netrate.Snapshot
-	procs []procscan.Process
-	gwRTT *float64
+	mu      sync.Mutex
+	netCall int
+	nets    []netrate.Snapshot
+	procs   []procscan.Process
+	gwRTT   *float64
 }
 
 func (f *fakeCollector) Processes(context.Context) ([]procscan.Process, error) { return f.procs, nil }
 func (f *fakeCollector) Net(context.Context, string) (netrate.Snapshot, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.netCall++
 	s := f.nets[0]
 	if len(f.nets) > 1 {
 		f.nets = f.nets[1:]
@@ -166,6 +169,7 @@ func TestLateFirstReadingSeedsDetector(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
 	cfg.Interval = 1
+	cfg.NetEvery = 1
 	cfg.Compile()
 	t0 := time.Now()
 	k := netrate.Key{Name: "browser", PID: 5}
@@ -189,5 +193,51 @@ func TestLateFirstReadingSeedsDetector(t *testing.T) {
 		if e.Event == record.NewNetApp {
 			t.Fatalf("an app already online at the first reading was reported as new: %+v", e)
 		}
+	}
+}
+
+// Per-process traffic is sampled every net_every seconds while healthy and
+// every cycle while pings look bad, with rates carried into skipped cycles.
+func TestTrafficSampledLessOftenWhileHealthy(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.Interval, cfg.NetEvery = 10, 30
+	cfg.Compile()
+	now := time.Unix(1_000_000, 0)
+	k := netrate.Key{Name: "app", PID: 9}
+	var nets []netrate.Snapshot
+	for i := 0; i < 20; i++ {
+		nets = append(nets, netrate.Snapshot{At: now.Add(time.Duration(i) * 10 * time.Second), HasBytes: true,
+			Procs: map[netrate.Key]netrate.Counter{k: {In: uint64(i) * 1 << 20}}})
+	}
+	fc := &fakeCollector{nets: nets}
+	d := Deps{Cfg: &cfg, Col: fc, Now: func() time.Time { return now },
+		Events:  eventlog.NewWriter(filepath.Join(dir, "events.jsonl"), 1<<20),
+		Samples: eventlog.NewWriter(filepath.Join(dir, "samples.jsonl"), 1<<20)}
+	s := &state{d: d, runaway: procscan.NewRunawayTracker(), orphans: map[identity]bool{},
+		errSeen: map[string]time.Time{}}
+	s.meter = selfusage.NewMeter()
+	run := func(cycles int) int {
+		before := fc.netCall
+		for i := 0; i < cycles; i++ {
+			s.cycle(context.Background(), false)
+			now = now.Add(10 * time.Second)
+		}
+		return fc.netCall - before
+	}
+	if got := run(6); got != 2 {
+		t.Fatalf("healthy: %d traffic samples in 6 cycles of 10 s, want 2 (every 30 s)", got)
+	}
+	slow := 500.0
+	fc.gwRTT = &slow
+	if got := run(4); got != 4 {
+		t.Fatalf("bad pings: %d traffic samples in 4 cycles, want every cycle", got)
+	}
+	samples, _ := eventlog.ReadSince(filepath.Join(dir, "samples.jsonl"), time.Time{}, func(x record.Sample) string { return x.TS })
+	if len(samples) != 10 {
+		t.Fatalf("want a sample every cycle, got %d", len(samples))
+	}
+	if samples[4].InKBps == 0 || samples[4].InKBps != samples[3].InKBps {
+		t.Fatalf("skipped cycle should carry the last rate forward: %v then %v", samples[3].InKBps, samples[4].InKBps)
 	}
 }
