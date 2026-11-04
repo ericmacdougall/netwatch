@@ -175,6 +175,9 @@ func TestSamplerRecordShape(t *testing.T) {
 	if rec.TopCPU[0].CPUPct < 8.9 || rec.TopCPU[0].CPUPct > 9.1 { // 0.9s over 10s
 		t.Fatalf("cpu %v", rec.TopCPU[0].CPUPct)
 	}
+	if rec.Pressure != "warn" || rec.SwapUsed != 3<<30 || rec.CompressorPct != 0 {
+		t.Fatalf("flat fields %+v", rec)
+	}
 	if rec.Sys.Pressure != "warn" || rec.Sys.SwapUsed != 3<<30 || rec.Sys.HeadroomBytes != 1000*16384 || rec.Unread != 1 {
 		t.Fatalf("sys %+v", rec.Sys)
 	}
@@ -207,5 +210,36 @@ func TestTopDefaultAndEmpty(t *testing.T) {
 	Write(&buf, ByMem, rows, 0, false)
 	if !strings.Contains(buf.String(), "PID") {
 		t.Fatal("header missing for an empty list")
+	}
+}
+
+func TestRecordJSONFieldNames(t *testing.T) {
+	f := fixture()
+	f.sys.PagesCompressed, f.sys.PagesCompressedLimit = 50, 100
+	f.procs[1].PGID = 77
+	s := New(f, 2)
+	s.Now = func() time.Time { return t0 }
+	rec, _ := s.Sample()
+	line, _ := rec.Line()
+	var m map[string]any
+	if err := json.Unmarshal(line, &m); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"ts", "pressure", "compressor_pct", "swap_used", "top_mem"} {
+		if _, ok := m[k]; !ok {
+			t.Errorf("missing top-level %q in %s", k, line)
+		}
+	}
+	if m["compressor_pct"].(float64) != 50 {
+		t.Fatalf("compressor_pct %v", m["compressor_pct"])
+	}
+	row := m["top_mem"].([]any)[0].(map[string]any)
+	for _, k := range []string{"pid", "pgid", "name", "footprint"} {
+		if _, ok := row[k]; !ok {
+			t.Errorf("missing row field %q", k)
+		}
+	}
+	if row["pgid"].(float64) != 77 {
+		t.Fatalf("pgid %v", row["pgid"])
 	}
 }

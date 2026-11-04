@@ -31,12 +31,16 @@ const (
 type Row struct {
 	PID       int     `json:"pid"`
 	PPID      int     `json:"ppid"`
+	PGID      int     `json:"pgid"`
 	Start     string  `json:"start"` // RFC 3339, identifies the process across pid reuse
 	Name      string  `json:"name"`
-	Footprint uint64  `json:"footprint_bytes"`
+	Footprint uint64  `json:"footprint"`
 	CPUPct    float64 `json:"cpu_pct"`
 	Cmd       string  `json:"cmd"`
 	Cwd       string  `json:"cwd,omitempty"`
+	// Agent and Confidence are attribution (informational only), filled by the caller.
+	Agent      string  `json:"agent,omitempty"`
+	Confidence float64 `json:"confidence,omitempty"`
 }
 
 // SysRecord is the system part of the record.
@@ -65,11 +69,14 @@ type SysRecord struct {
 
 // Record is one line of resources.jsonl.
 type Record struct {
-	TS     string    `json:"ts"`
-	Sys    SysRecord `json:"sys"`
-	TopMem []Row     `json:"top_mem"`
-	TopCPU []Row     `json:"top_cpu"`
-	Unread int       `json:"unreadable_procs"`
+	TS            string    `json:"ts"`
+	Pressure      string    `json:"pressure"`
+	CompressorPct float64   `json:"compressor_pct"` // larger of page and segment fill, percent
+	SwapUsed      uint64    `json:"swap_used"`      // bytes
+	Sys           SysRecord `json:"sys"`
+	TopMem        []Row     `json:"top_mem"`
+	TopCPU        []Row     `json:"top_cpu"`
+	Unread        int       `json:"unreadable_procs"`
 }
 
 // SysFrom converts a reading.
@@ -121,12 +128,28 @@ func (s *Sampler) Sample() (Record, error) {
 	if err != nil {
 		return Record{}, err
 	}
-	rec := Record{TS: now.UTC().Format(time.RFC3339), Sys: SysFrom(sys)}
+	rec := Record{TS: now.UTC().Format(time.RFC3339), Sys: SysFrom(sys),
+		Pressure: sys.Pressure.String(), CompressorPct: CompressorPct(sys), SwapUsed: sys.SwapUsed}
 	rows, unread := s.rows(procs, now)
 	rec.Unread = unread
 	rec.TopMem = s.pick(rows, func(a, b *Row) bool { return a.Footprint > b.Footprint }, s.N)
 	rec.TopCPU = s.pick(rows, func(a, b *Row) bool { return a.CPUPct > b.CPUPct }, s.N)
 	return rec, nil
+}
+
+// CompressorPct is the compressor fill, the larger of the page and segment
+// ratios, in percent (the D2 quantity). Zero when the limits are unknown.
+func CompressorPct(s resources.System) float64 {
+	var f float64
+	if s.PagesCompressedLimit > 0 {
+		f = float64(s.PagesCompressed) / float64(s.PagesCompressedLimit)
+	}
+	if s.SegmentLimit > 0 {
+		if g := float64(s.Segments) / float64(s.SegmentLimit); g > f {
+			f = g
+		}
+	}
+	return f * 100
 }
 
 // Line returns the record as one JSON line (no trailing newline).
@@ -147,7 +170,7 @@ func (s *Sampler) rows(procs []resources.Proc, now time.Time) ([]Row, int) {
 		}
 		k := key{p.PID, p.Start.UnixNano()}
 		next[k] = p.CPUTime
-		r := Row{PID: p.PID, PPID: p.PPID, Start: p.Start.UTC().Format(time.RFC3339), Name: p.Name, Footprint: p.Footprint}
+		r := Row{PID: p.PID, PPID: p.PPID, PGID: p.PGID, Start: p.Start.UTC().Format(time.RFC3339), Name: p.Name, Footprint: p.Footprint}
 		if prev, ok := s.prev[k]; ok && dt > 0 && p.CPUTime >= prev {
 			r.CPUPct = float64(p.CPUTime-prev) / float64(dt) * 100
 		}
