@@ -4,7 +4,6 @@ package guard
 
 import (
 	"errors"
-	"os"
 	"syscall"
 )
 
@@ -15,14 +14,6 @@ const (
 	sigTERM = syscall.Signal(15)
 	sigKILL = syscall.Signal(9)
 )
-
-const (
-	oNoFollow = 0
-	oNonblock = 0
-)
-
-func ownedBySelf(os.FileInfo) bool { return true }
-func fsyncDir(string) error        { return nil }
 
 // kill is unsupported: there is no guard on Windows.
 func kill(int, syscall.Signal) error {
