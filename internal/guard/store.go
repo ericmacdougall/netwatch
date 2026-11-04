@@ -4,11 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/ericmacdougall/netwatch/internal/safeio"
 )
 
 // Store persists the guard State. Save must be durable (fsynced) when it
@@ -30,9 +31,7 @@ var (
 const MaxStateBytes = 4 << 20
 
 // FileStore is the on-disk Store. The directory must be 0700 and ours;
-// the file is written through a temp file (O_EXCL|O_NOFOLLOW, 0600),
-// fsynced and renamed (amendment A8). internal/safeio will replace the
-// local helpers below; they implement the same rules.
+// the file is written and read through internal/safeio (amendment A8).
 type FileStore struct {
 	Path string
 	mu   sync.Mutex
@@ -48,7 +47,7 @@ func (f *FileStore) Save(st State) (time.Duration, error) {
 		return 0, err
 	}
 	t0 := time.Now()
-	if err := writeFileAtomicLocal(f.Path, b); err != nil {
+	if err := writeState(f.Path, b); err != nil {
 		return time.Since(t0), err
 	}
 	return time.Since(t0), nil
@@ -59,7 +58,7 @@ func (f *FileStore) Save(st State) (time.Duration, error) {
 func (f *FileStore) Load() (State, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	b, err := readFileLocal(f.Path, MaxStateBytes)
+	b, err := readState(f.Path)
 	if err != nil {
 		return State{}, err
 	}
@@ -100,80 +99,38 @@ func decodeState(b []byte) (State, error) {
 	return st, nil
 }
 
-func readFileLocal(path string, max int64) ([]byte, error) {
-	li, err := os.Lstat(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, ErrMissing
-		}
-		return nil, err
-	}
-	if li.Mode()&os.ModeSymlink != 0 {
-		return nil, fmt.Errorf("%w: symlink", ErrUnsafe)
-	}
-	fl, err := os.OpenFile(path, os.O_RDONLY|oNoFollow|oNonblock, 0)
-	if err != nil {
+// readState reads the state file through safeio: no symlink, regular file,
+// ours, mode 0600 or narrower, capped.
+func readState(path string) ([]byte, error) {
+	b, err := safeio.ReadFile(path, safeio.Opts{Max: MaxStateBytes, RequireOwner: true, MaxPerm: 0o600})
+	switch {
+	case err == nil:
+		return b, nil
+	case errors.Is(err, os.ErrNotExist):
+		return nil, ErrMissing
+	case errors.Is(err, safeio.ErrTooLarge):
+		return nil, fmt.Errorf("%w: %v", ErrCorrupt, err)
+	case errors.Is(err, safeio.ErrNotRegular), errors.Is(err, safeio.ErrOwner), errors.Is(err, safeio.ErrPerm):
 		return nil, fmt.Errorf("%w: %v", ErrUnsafe, err)
 	}
-	defer fl.Close()
-	fi, err := fl.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !fi.Mode().IsRegular() {
-		return nil, fmt.Errorf("%w: not a regular file", ErrUnsafe)
-	}
-	if !ownedBySelf(fi) || fi.Mode().Perm()&0o077 != 0 {
-		return nil, fmt.Errorf("%w: owner or mode", ErrUnsafe)
-	}
-	b, err := io.ReadAll(io.LimitReader(fl, max+1))
-	if err != nil {
-		return nil, err
-	}
-	if int64(len(b)) > max {
-		return nil, fmt.Errorf("%w: larger than %d bytes", ErrCorrupt, max)
-	}
-	return b, nil
+	return nil, err
 }
 
-func writeFileAtomicLocal(path string, data []byte) error {
+// writeState writes through safeio.WriteFileAtomic (A8). A symlink at the
+// target is refused up front: rename would silently replace it.
+func writeState(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	di, err := os.Lstat(dir)
-	if err != nil {
-		return err
-	}
-	if di.Mode()&os.ModeSymlink != 0 || !di.IsDir() || !ownedBySelf(di) || di.Mode().Perm()&0o077 != 0 {
-		return fmt.Errorf("%w: directory %s", ErrUnsafe, dir)
-	}
 	if li, err := os.Lstat(path); err == nil && li.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("%w: target is a symlink", ErrUnsafe)
 	}
-	tmp := fmt.Sprintf("%s.tmp-%d-%d", path, os.Getpid(), time.Now().UnixNano())
-	fl, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY|oNoFollow, 0o600)
-	if err != nil {
-		return err
+	err := safeio.WriteFileAtomic(dir, filepath.Base(path), data)
+	if errors.Is(err, safeio.ErrNotRegular) || errors.Is(err, safeio.ErrOwner) || errors.Is(err, safeio.ErrPerm) {
+		return fmt.Errorf("%w: %v", ErrUnsafe, err)
 	}
-	cleanup := func() { fl.Close(); os.Remove(tmp) }
-	if _, err := fl.Write(data); err != nil {
-		cleanup()
-		return err
-	}
-	if err := fl.Sync(); err != nil {
-		cleanup()
-		return err
-	}
-	if err := fl.Close(); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	return fsyncDir(dir)
+	return err
 }
 
 // MemStore is an in-memory Store for tests and dry runs. Delay simulates a
