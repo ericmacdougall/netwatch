@@ -226,13 +226,14 @@ netwatch runs with lowered CPU and I/O priority on macOS and Linux (normal prior
 
 Measured on an Apple M5 laptop (10 cores, macOS 26), with the installed LaunchAgent at default settings for 30 minutes, about 800 processes, and 1–4 MB/s of traffic:
 
-| | Average | Peak |
+| | v0.1.1 (`net_every` 30 s) | v0.1.0 (traffic every cycle) |
 |---|---|---|
-| netwatch process CPU (`ps` time) | 0.28% of one core | |
-| netwatch plus helpers (`self.cpu_pct`, 155 samples) | 1.16% of one core (about 0.12% of the machine) | 3.7% in a sample with a process scan |
-| Resident memory | | 13 MB |
+| netwatch process CPU (`ps` time), average | 0.22% of one core | 0.28% of one core |
+| netwatch plus helpers (`self.cpu_pct`), average | 0.61% of one core (156 samples) | 1.16% of one core (155 samples) |
+| netwatch plus helpers, peak sample | 3.0% (a sample with a process scan) | 3.7% |
+| Resident memory, peak | 12 MB | 13 MB |
 
-Most of the helper cost is the per-sample `nettop` (about 18 ms of CPU each); `ps` costs about 60 ms once a minute, and the two pings and `route` a few milliseconds each. On Windows the service's working set was about 15 MB. Run `netwatch report --since 1h` to see the figures for your machine.
+Most of the helper cost is `nettop` (about 18 ms of CPU per call). Since v0.1.1 it runs every `net_every` seconds (default 30) while the link is healthy, and on every cycle while pings fail or the link is degraded, so a problem still gets per-app traffic at full resolution. `ps` costs about 60 ms once a minute, and the two pings and `route` a few milliseconds each. On Windows the service's working set was about 15 MB. Run `netwatch report --since 1h` to see the figures for your machine.
 
 ## Development
 
