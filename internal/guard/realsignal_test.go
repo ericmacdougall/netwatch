@@ -23,8 +23,13 @@ func (psStart) Start(pid int) (time.Time, error) {
 	if err != nil || strings.TrimSpace(string(out)) == "" {
 		return time.Time{}, errors.New("no such process")
 	}
-	f := strings.Fields(string(out))
-	return time.ParseInLocation("Mon Jan 2 15:04:05 2006", strings.Join(f, " "), time.Local)
+	f := strings.Join(strings.Fields(string(out)), " ")
+	// Linux prints "Wed Nov 4 ..."; macOS (some locales) "Wed 4 Nov ...".
+	t, err := time.ParseInLocation("Mon Jan 2 15:04:05 2006", f, time.Local)
+	if err != nil {
+		t, err = time.ParseInLocation("Mon 2 Jan 15:04:05 2006", f, time.Local)
+	}
+	return t, err
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }
