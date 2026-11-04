@@ -689,5 +689,8 @@ func ReplayInputFrom(rep *Report, mode Mode) ReplayInput {
 	if rep.Estimate != nil && rep.Estimate.Attribution != nil {
 		in.AgentLabel, in.Confidence = rep.Estimate.Attribution.Agent, rep.Estimate.Attribution.Confidence
 	}
+	if in.AgentLabel == "" && len(rep.Candidates) > 0 {
+		in.AgentLabel, in.Confidence = rep.Candidates[0].Label(), rep.Candidates[0].Confidence
+	}
 	return in
 }
