@@ -40,6 +40,7 @@ const (
 // Member is one process in a group, identified by (PID, Start).
 type Member struct {
 	PID      int
+	PPID     int // lets the executor signal top-down
 	Start    time.Time
 	Excluded bool // never signalled (exclusion rule or never-signal list)
 	Stopped  bool // already in state T when observed
