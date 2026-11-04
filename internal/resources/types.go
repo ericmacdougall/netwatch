@@ -39,6 +39,9 @@ type System struct {
 	PageSize uint64
 
 	Free, Speculative, Purgeable, Inactive uint64 // pages
+	// InactiveEstimated is set when the platform has no inactive-page
+	// counter and Inactive is a proxy (macOS: file-backed pageable pages).
+	InactiveEstimated bool
 
 	CompressorBytes      uint64 // physical bytes the compressor occupies
 	PagesCompressed      uint64 // logical pages held by the compressor
