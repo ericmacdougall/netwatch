@@ -14,6 +14,7 @@ import (
 type Signals struct {
 	D1, D2, D3, D5 bool
 	D4PGIDs        []int // groups that satisfy D4 this poll
+	P1PGIDs        []int // groups that satisfy P1 this poll (corroborated or not)
 	P1             bool
 	P1Corroborated bool
 	Danger         bool // any of D1-D4, or corroborated P1
@@ -35,3 +36,9 @@ func Headroom(s resources.System) uint64 {
 
 // Clock lets tests control time.
 type Clock interface{ Now() time.Time }
+
+// Point is one footprint sample of a group or aggregate.
+type Point struct {
+	At    time.Time
+	Bytes uint64
+}
