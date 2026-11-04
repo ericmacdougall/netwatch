@@ -25,6 +25,8 @@ type Elig struct {
 	Versions     []string
 	AllowlistDir string
 	Labeler      *attrib.Labeler // optional; labels are informational
+	// TestJobPGID is the test daemon's spawned job group (0: none).
+	TestJobPGID int
 
 	resolver *attrib.Resolver
 	labels   map[labelKey]string
@@ -47,6 +49,7 @@ func (e *Elig) Classify(scan []resources.Proc, recs []watcher.Record, budgets ma
 		Procs: scan, Records: recs, Env: e.R.Env, Args: e.R.Args,
 		NeverSignal: e.NeverSignal, Allowlist: e.allowlist(scan),
 		Budgets: budgetList(budgets), SelfPID: e.SelfPID, UID: e.UID, Resolver: e.resolver,
+		TestJobPGID: e.TestJobPGID,
 	}
 	out := eligibility.Classify(in)
 	e.label(out)

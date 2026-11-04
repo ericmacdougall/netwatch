@@ -119,7 +119,7 @@ func TestRunRejectsJobWithoutTestDaemon(t *testing.T) {
 	}
 }
 
-// The test daemon spawns its job as the leader of a new process group,
+// The test daemon spawns its job as the leader of a new session and group,
 // records that group, and exits when the job does.
 func TestTestDaemonSpawnsJobInOwnGroup(t *testing.T) {
 	cfgFile := filepath.Join(t.TempDir(), "c.json")
@@ -128,7 +128,7 @@ func TestTestDaemonSpawnsJobInOwnGroup(t *testing.T) {
 	}
 	logDir := t.TempDir()
 	marker := filepath.Join(t.TempDir(), "ids")
-	job := []string{"sh", "-c", "echo $$ $(ps -o pgid= -p $$) > " + marker + "; sleep 1"}
+	job := []string{"sh", "-c", "echo $$ $(ps -o pgid= -p $$) $(ps -o stat= -p $$) > " + marker + "; sleep 1"}
 	var out, errb bytes.Buffer
 	code := make(chan int, 1)
 	go func() {
@@ -147,8 +147,9 @@ func TestTestDaemonSpawnsJobInOwnGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := strings.Fields(string(ids))
-	if len(f) != 2 || f[0] != f[1] {
-		t.Fatalf("job is not its own group leader: %q", ids)
+	// stat flag "s": session leader (Linux and macOS ps).
+	if len(f) != 3 || f[0] != f[1] || !strings.Contains(f[2], "s") {
+		t.Fatalf("job is not its own session and group leader (pid pgid stat): %q", ids)
 	}
 	rec, err := os.ReadFile(filepath.Join(logDir, "state", "test-target"))
 	if err != nil || strings.Fields(string(rec))[0] != f[0] {
