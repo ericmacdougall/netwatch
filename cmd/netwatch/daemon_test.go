@@ -159,3 +159,17 @@ func TestTestDaemonSpawnsJobInOwnGroup(t *testing.T) {
 		t.Fatalf("stderr: %s", errb.String())
 	}
 }
+
+// The daemon caps GOMAXPROCS on hosts with more cores than it needs, and
+// leaves an explicit GOMAXPROCS alone.
+func TestDaemonProcs(t *testing.T) {
+	for _, c := range []struct {
+		env  bool
+		ncpu int
+		want int
+	}{{false, 192, 2}, {false, 10, 2}, {false, 2, 0}, {false, 1, 0}, {true, 192, 0}} {
+		if got := daemonProcs(c.env, c.ncpu); got != c.want {
+			t.Errorf("daemonProcs(%v, %d) = %d, want %d", c.env, c.ncpu, got, c.want)
+		}
+	}
+}

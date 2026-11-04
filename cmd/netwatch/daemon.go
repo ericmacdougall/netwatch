@@ -33,6 +33,21 @@ import (
 // 30 MB RSS budget with room for the binary and stacks.
 const daemonMemLimit = 20 << 20
 
+// daemonMaxProcs caps the daemon's Go processors. The daemon needs no
+// parallelism, and on a large host the default (one P per core) lets idle
+// GC mark workers run on every core: on a 192-core host the hot daemon
+// used about 1.5 cores, almost all in the GC; with 2 Ps it used 2%.
+const daemonMaxProcs = 2
+
+// daemonProcs is the GOMAXPROCS the daemon sets, or 0 to leave it alone
+// (the user set GOMAXPROCS, or the host has no more cores than the cap).
+func daemonProcs(envSet bool, ncpu int) int {
+	if envSet || ncpu <= daemonMaxProcs {
+		return 0
+	}
+	return daemonMaxProcs
+}
+
 // resourceDeps is what the resource daemon needs from cmdRun.
 type resourceDeps struct {
 	cfg      *config.Config
