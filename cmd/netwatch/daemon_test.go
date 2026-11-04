@@ -8,9 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ericmacdougall/netwatch/internal/collector"
 	"github.com/ericmacdougall/netwatch/internal/config"
+	"github.com/ericmacdougall/netwatch/internal/shapecheck"
 )
 
 // CR-10: install states the mode and the one-command opt-out.
@@ -84,5 +86,24 @@ func TestOnceRejectsTestDaemon(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := run([]string{"once", "--test-daemon"}, &out, &errb); code != 2 {
 		t.Fatalf("once --test-daemon: exit %d", code)
+	}
+}
+
+// The daemon's shape check reads transcripts only from just before the
+// oldest tool-shell-shaped child; with none it reads nothing.
+func TestShapeWindowStart(t *testing.T) {
+	base := time.Date(2026, 11, 4, 16, 0, 0, 0, time.UTC)
+	kids := []shapecheck.Child{
+		{PID: 1, Start: base.Add(-3 * time.Hour), Shape: shapecheck.Shape{Setsid: false, NoTTY: true}}, // MCP-like: ignored
+		{PID: 2, Start: base.Add(-10 * time.Second), Shape: shapecheck.Shape{Setsid: true, NoTTY: true}},
+		{PID: 3, Start: base.Add(-2 * time.Second), Shape: shapecheck.Shape{Setsid: true, NoTTY: true}},
+		{PID: 4, Start: base.Add(-time.Hour), Shape: shapecheck.Shape{Setsid: true, NoTTY: false}}, // has a tty: ignored
+	}
+	ws, ok := shapeWindowStart(kids)
+	if !ok || !ws.Equal(base.Add(-10*time.Second-shapeSlack)) {
+		t.Fatalf("window start = %v, %v", ws, ok)
+	}
+	if _, ok := shapeWindowStart(kids[:1]); ok {
+		t.Fatal("no shaped child must mean no transcript read")
 	}
 }

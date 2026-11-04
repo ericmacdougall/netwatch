@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -26,6 +27,10 @@ import (
 	"github.com/ericmacdougall/netwatch/internal/shapecheck"
 	"github.com/ericmacdougall/netwatch/internal/transcript"
 )
+
+// daemonMemLimit is the Go soft memory limit for the daemon, under the
+// 30 MB RSS budget with room for the binary and stacks.
+const daemonMemLimit = 20 << 20
 
 // resourceDeps is what the resource daemon needs from cmdRun.
 type resourceDeps struct {
@@ -99,6 +104,10 @@ func (a *app) refuseInstalledPaths() error {
 // ctx ends. The returned channel yields the loop's result after it has
 // resumed every paused group.
 func (a *app) startResources(ctx context.Context, d resourceDeps) (<-chan error, error) {
+	// The budget is 30 MB RSS. The live heap is a few MB, but bursts (the
+	// shape check's transcript scan, jetsam reports) leave freed memory
+	// mapped; a soft limit makes the GC and scavenger give it back.
+	debug.SetMemoryLimit(daemonMemLimit)
 	r := resources.New()
 	stateDir, stateFile, allowDir := statePaths(a.logDir)
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
@@ -184,13 +193,25 @@ func (a *app) shapeChecks(ctx context.Context, d resourceDeps, stateDir string, 
 			if shapecheck.Allowed(stateDir, v) || !s.Due(now) {
 				continue
 			}
-			v := v
+			kids := liveChildren(r, v)
+			ws, ok := shapeWindowStart(kids)
+			if !ok {
+				// No tool-shell-shaped child to confirm right now: the same
+				// inconclusive verdict Run would give, without reading
+				// any transcript.
+				s.Record(now, shapecheck.Inconclusive)
+				continue
+			}
 			res, err := shapecheck.Run(shapecheck.Config{
 				Version: v, StateDir: stateDir,
 				SettingsPaths: shapecheck.DefaultSettingsPaths(home, nil),
-				Children:      func() []shapecheck.Child { return liveChildren(r, v) },
+				Children:      func() []shapecheck.Child { return kids },
 				Calls: func(from, to time.Time) ([]transcript.Call, error) {
-					c, _, err := transcript.Scan(transcript.Config{WindowStart: from})
+					if from.Before(ws) {
+						from = ws
+					}
+					c, _, err := transcript.Scan(transcript.Config{WindowStart: from,
+						MaxFiles: shapeMaxFiles, MaxFileBytes: shapeMaxFileBytes})
 					return c, err
 				},
 				Events: d.events,
@@ -199,6 +220,9 @@ func (a *app) shapeChecks(ctx context.Context, d resourceDeps, stateDir string, 
 				errs("shape check", err)
 			}
 			s.Record(now, res.Verdict)
+			// The scan is a burst of large, short-lived reads; return the
+			// memory now rather than holding it until the next GC cycle.
+			debug.FreeOSMemory()
 		}
 		select {
 		case <-ctx.Done():
@@ -245,4 +269,32 @@ func guardInstallNote(cfg *config.Config, logDir, goos string) string {
 		note += " Enable pausing with: netwatch guard pause"
 	}
 	return note
+}
+
+// Shape-check transcript bounds for the daemon. The check matches calls to
+// children alive now, so it reads only recently modified transcripts, and
+// only their tails (the 30 MB RSS budget; an unbounded 24h scan cost about
+// 22 MB on a busy machine).
+const (
+	shapeMaxFiles     = 50
+	shapeMaxFileBytes = 1 << 20
+	shapeSlack        = 5 * time.Second
+)
+
+// shapeWindowStart is just before the oldest tool-shell-shaped child
+// (setsid, no tty) started. ok is false when there is none.
+func shapeWindowStart(kids []shapecheck.Child) (time.Time, bool) {
+	var ws time.Time
+	for _, k := range kids {
+		if !k.Shape.Setsid || !k.Shape.NoTTY || k.Start.IsZero() {
+			continue
+		}
+		if ws.IsZero() || k.Start.Before(ws) {
+			ws = k.Start
+		}
+	}
+	if ws.IsZero() {
+		return ws, false
+	}
+	return ws.Add(-shapeSlack), true
 }

@@ -225,7 +225,8 @@ func (l *Loop) Tick() (hot bool) {
 	procs := l.procs
 	l.mu.Unlock()
 
-	if err := l.d.Exec.Reconcile(); err != nil {
+	// A missing state file just means nothing has been paused yet.
+	if err := l.d.Exec.Reconcile(); err != nil && !errors.Is(err, guard.ErrMissing) {
 		l.d.Errs("guard reconcile", err)
 	}
 	l.d.Exec.Apply(l.d.Machine.Step(snap))
