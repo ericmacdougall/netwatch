@@ -104,6 +104,14 @@ func ManualResumeLive(store Store, view ProcView, sig Signaller, now time.Time, 
 		}
 		delete(st.Groups, r.Key())
 		st.LastResume[r.Key()] = now
+		if st.Episode != nil {
+			// Same hold as the daemon's ResumeKey: a daemon that starts
+			// during this episode must not pause the group again.
+			if st.Episode.Held == nil {
+				st.Episode.Held = map[string]bool{}
+			}
+			st.Episode.Held[r.Key()] = true
+		}
 	}
 	sort.Ints(rep.Resumed)
 	if req != nil {
