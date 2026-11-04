@@ -324,3 +324,10 @@ func (r *linuxReader) Cwd(pid int) string {
 
 // SelfTest implements Reader: our own footprint and our own group.
 func (r *linuxReader) SelfTest() error { return selfTest(r, r.self) }
+
+// ExePath implements ExeResolver.
+func (r *linuxReader) ExePath(pid int) string {
+	var pb [96]byte
+	l, _ := os.Readlink(r.procPath(pb[:0], pid, "exe"))
+	return l
+}

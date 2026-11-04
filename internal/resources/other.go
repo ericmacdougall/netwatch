@@ -25,3 +25,5 @@ func (unsupported) Footprint(int) (uint64, time.Time, error) {
 }
 func (unsupported) AppendGroupMembers(d []int, _ int) ([]int, error) { return d, ErrUnsupported }
 func (unsupported) AppendChildren(d []int, _ int) ([]int, error)     { return d, ErrUnsupported }
+
+func (unsupported) ExePath(int) string { return "" }
