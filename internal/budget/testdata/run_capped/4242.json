@@ -1,0 +1,11 @@
+{
+  "wrapper_pid": 4242,
+  "pgid": 4243,
+  "child_pid": 4243,
+  "max_rss_gb": 8,
+  "max_procs": 32,
+  "timeout_s": 600,
+  "started_at": 1793808400.5,
+  "host": "host.example",
+  "argv0": "/home/user/bin/run_capped"
+}
