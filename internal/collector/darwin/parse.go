@@ -79,49 +79,34 @@ func ParsePS(out string, uid int, loc *time.Location) []procscan.Process {
 }
 
 // NettopArgs request one CSV sample of cumulative bytes per process.
-var NettopArgs = []string{"-P", "-L", "1", "-x", "-J", "bytes_in,bytes_out"}
+// -n matters: without it nettop resolves every peer address to a name and
+// took 30 s to start when reverse DNS was slow; with it a sample takes
+// about 20 ms.
+var NettopArgs = []string{"-P", "-n", "-L", "1", "-x", "-J", "bytes_in,bytes_out"}
 
-// NettopStreamArgs keep nettop running and print a sample every interval.
-// One long-lived nettop is cheaper than spawning one per sample, and nettop
-// can take tens of seconds to start when the system has many flows.
-func NettopStreamArgs(interval time.Duration) []string {
-	secs := int(interval.Seconds())
-	if secs < 1 {
-		secs = 1
-	}
-	return []string{"-P", "-x", "-J", "bytes_in,bytes_out", "-L", "0", "-s", strconv.Itoa(secs)}
-}
-
-// parseRow parses "name.pid,in,out," or, in streaming mode,
-// "15:04:05.000000,name.pid,in,out,".
-func parseRow(line string, hasTime bool) (ts string, k netrate.Key, c netrate.Counter, ok bool) {
+// parseRow parses one "name.pid,in,out," row.
+func parseRow(line string) (k netrate.Key, c netrate.Counter, ok bool) {
 	parts := strings.Split(strings.TrimSpace(line), ",")
-	if hasTime {
-		if len(parts) < 4 {
-			return "", k, c, false
-		}
-		ts, parts = parts[0], parts[1:]
-	}
 	if len(parts) < 3 {
-		return "", k, c, false
+		return k, c, false
 	}
 	dot := strings.LastIndexByte(parts[0], '.')
 	if dot <= 0 {
-		return "", k, c, false
+		return k, c, false
 	}
 	pid, err := strconv.Atoi(parts[0][dot+1:])
 	if err != nil {
-		return "", k, c, false
+		return k, c, false
 	}
 	in, err1 := parseCount(parts[1])
 	out, err2 := parseCount(parts[2])
 	if err1 != nil || err2 != nil {
-		return "", k, c, false
+		return k, c, false
 	}
-	return ts, netrate.Key{Name: parts[0][:dot], PID: pid}, netrate.Counter{In: in, Out: out}, true
+	return netrate.Key{Name: parts[0][:dot], PID: pid}, netrate.Counter{In: in, Out: out}, true
 }
 
-// ParseNettop parses one-shot nettop CSV: a header, then rows.
+// ParseNettop parses nettop CSV: a header, then rows.
 // nettop truncates long process names; the PID keeps keys unique.
 func ParseNettop(out string) map[netrate.Key]netrate.Counter {
 	res := map[netrate.Key]netrate.Counter{}
@@ -129,7 +114,7 @@ func ParseNettop(out string) map[netrate.Key]netrate.Counter {
 		if i == 0 {
 			continue
 		}
-		_, k, c, ok := parseRow(line, false)
+		k, c, ok := parseRow(line)
 		if !ok {
 			continue
 		}
@@ -137,63 +122,6 @@ func ParseNettop(out string) map[netrate.Key]netrate.Counter {
 		res[k] = netrate.Counter{In: prev.In + c.In, Out: prev.Out + c.Out}
 	}
 	return res
-}
-
-// StreamParser assembles samples from streaming nettop output. Each sample
-// starts with a header line, and every row carries the sample's time of
-// day. nettop block-buffers its output when piped, so several samples can
-// arrive at once; the embedded time, not the arrival time, dates a sample.
-type StreamParser struct {
-	Loc *time.Location
-	cur *netrate.Snapshot
-}
-
-// Feed consumes one line and returns the previous sample when this line
-// starts a new one. now anchors the time of day to a date.
-func (p *StreamParser) Feed(line string, now time.Time) *netrate.Snapshot {
-	if strings.HasPrefix(line, "time,") || strings.HasPrefix(line, ",") {
-		return p.flush()
-	}
-	ts, k, c, ok := parseRow(line, true)
-	if !ok {
-		return nil
-	}
-	if p.cur == nil {
-		// The first row dates the sample; a sample's rows can straddle a
-		// second boundary, so later rows do not start a new one.
-		at, err := timeOfDay(ts, now, p.Loc)
-		if err != nil {
-			return nil
-		}
-		p.cur = &netrate.Snapshot{At: at, HasBytes: true, Procs: map[netrate.Key]netrate.Counter{}}
-	}
-	prev := p.cur.Procs[k]
-	p.cur.Procs[k] = netrate.Counter{In: prev.In + c.In, Out: prev.Out + c.Out}
-	return nil
-}
-
-func (p *StreamParser) flush() *netrate.Snapshot {
-	s := p.cur
-	p.cur = nil
-	return s
-}
-
-// timeOfDay dates "15:04:05.000000" on now's day, or the day before when
-// that would be in the future (a sample taken just before midnight).
-func timeOfDay(ts string, now time.Time, loc *time.Location) (time.Time, error) {
-	if loc == nil {
-		loc = time.Local
-	}
-	t, err := time.ParseInLocation("15:04:05.999999", ts, loc)
-	if err != nil {
-		return time.Time{}, err
-	}
-	n := now.In(loc)
-	at := time.Date(n.Year(), n.Month(), n.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), loc)
-	if at.After(n.Add(time.Minute)) {
-		at = at.AddDate(0, 0, -1)
-	}
-	return at, nil
 }
 
 func parseCount(s string) (uint64, error) {

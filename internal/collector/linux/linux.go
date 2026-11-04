@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -133,6 +134,7 @@ func (c *Collector) Processes(ctx context.Context) ([]procscan.Process, error) {
 		} else if p.Age > 0 {
 			p.CPU = float64(ticks) / clkTck / p.Age.Seconds() * 100
 		}
+		p.CPU = math.Round(p.CPU*10) / 10
 		next[pid] = cpuMark{start: st.StartTime, ticks: ticks, at: now}
 		procs = append(procs, p)
 	}

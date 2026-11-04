@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"syscall"
 	"time"
 
@@ -19,10 +18,7 @@ import (
 )
 
 // Collector implements the collector and service interfaces for macOS.
-type Collector struct {
-	mu     sync.Mutex
-	stream *netStream // nil until StartNetStream
-}
+type Collector struct{}
 
 // New returns a Collector.
 func New() *Collector { return &Collector{} }
@@ -49,13 +45,7 @@ func (c *Collector) Processes(ctx context.Context) ([]procscan.Process, error) {
 // Net samples nettop once. macOS gives per-process bytes without root, so
 // interface totals are not collected separately.
 func (c *Collector) Net(ctx context.Context, _ string) (netrate.Snapshot, error) {
-	c.mu.Lock()
-	stream := c.stream
-	c.mu.Unlock()
-	if stream != nil {
-		return stream.get()
-	}
-	out, err := execx.Output(ctx, 75*time.Second, "/usr/bin/nettop", NettopArgs...)
+	out, err := execx.Output(ctx, 30*time.Second, "/usr/bin/nettop", NettopArgs...)
 	snap := netrate.Snapshot{At: time.Now(), HasBytes: true, Procs: map[netrate.Key]netrate.Counter{}}
 	if err != nil {
 		return snap, err

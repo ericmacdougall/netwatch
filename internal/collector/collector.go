@@ -6,7 +6,6 @@ package collector
 
 import (
 	"context"
-	"time"
 
 	"github.com/ericmacdougall/netwatch/internal/health"
 	"github.com/ericmacdougall/netwatch/internal/netrate"
@@ -48,10 +47,4 @@ type Service interface {
 	Install(opts ServiceOptions) (string, error)
 	Uninstall(label string) (string, error)
 	Status(label string) (string, error)
-}
-
-// Streamer is implemented by collectors that can keep a network sampler
-// running in the background instead of starting one per sample.
-type Streamer interface {
-	StartNetStream(ctx context.Context, interval time.Duration)
 }

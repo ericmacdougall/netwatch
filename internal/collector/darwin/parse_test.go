@@ -75,38 +75,3 @@ func TestRenderPlistEscapes(t *testing.T) {
 		}
 	}
 }
-
-func TestStreamParser(t *testing.T) {
-	now := time.Date(2026, 5, 6, 10, 0, 30, 0, time.UTC)
-	p := &StreamParser{Loc: time.UTC}
-	lines := []string{
-		"time,,bytes_in,bytes_out,",
-		"10:00:10.100,launchd.1,0,0,",
-		"10:00:10.101,curl.42,1000,10,",
-		"time,,bytes_in,bytes_out,",
-		"10:00:20.100,curl.42,3000,20,",
-		"garbage",
-		"10:00:21.000,late.7,1,1,", // same sample, straddling a second
-		"time,,bytes_in,bytes_out,",
-	}
-	var got []*netrate.Snapshot
-	for _, l := range lines {
-		if s := p.Feed(l, now); s != nil {
-			got = append(got, s)
-		}
-	}
-	if len(got) != 2 {
-		t.Fatalf("want 2 completed samples, got %d", len(got))
-	}
-	if !got[0].At.Equal(time.Date(2026, 5, 6, 10, 0, 10, 100e6, time.UTC)) || got[0].Procs[netrate.Key{Name: "curl", PID: 42}].In != 1000 {
-		t.Fatalf("first sample wrong: %+v", got[0])
-	}
-	if got[1].At.Sub(got[0].At) != 10*time.Second || len(got[1].Procs) != 2 {
-		t.Fatalf("second sample wrong: %+v", got[1])
-	}
-	// Just after midnight a 23:59:59 sample belongs to yesterday.
-	at, err := timeOfDay("23:59:59.5", time.Date(2026, 5, 7, 0, 0, 2, 0, time.UTC), time.UTC)
-	if err != nil || !at.Equal(time.Date(2026, 5, 6, 23, 59, 59, 500e6, time.UTC)) {
-		t.Fatalf("midnight wrap: %v %v", at, err)
-	}
-}

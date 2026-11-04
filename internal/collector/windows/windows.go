@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -41,6 +42,13 @@ type Collector struct {
 	mu      sync.Mutex
 	prevCPU map[int]cpuMark
 	self    *windows.SID
+
+	// ifIndex remembers the default-route interface found by Gateway.
+	// net.InterfaceByName/ByIndex call GetAdaptersAddresses, which took
+	// several seconds per call on a machine with many virtual adapters.
+	ifMu    sync.Mutex
+	ifAlias string
+	ifIndex uint32
 }
 
 type cpuMark struct {
@@ -207,6 +215,7 @@ func (c *Collector) fill(p *procscan.Process, now time.Time, next map[int]cpuMar
 		} else if p.Age > 0 {
 			p.CPU = float64(cpu) / float64(p.Age) * 100
 		}
+		p.CPU = math.Round(p.CPU*10) / 10
 		next[p.PID] = cpuMark{created: p.Start, cpu: cpu, at: now}
 	}
 	img := imagePath(h)
@@ -284,12 +293,12 @@ func connections() (map[int]int, error) {
 // byte totals of the default-route interface.
 func (c *Collector) Net(_ context.Context, iface string) (netrate.Snapshot, error) {
 	snap := netrate.Snapshot{At: time.Now(), Procs: map[netrate.Key]netrate.Counter{}}
-	if iface != "" {
-		if ifc, err := net.InterfaceByName(iface); err == nil {
-			row := windows.MibIfRow2{InterfaceIndex: uint32(ifc.Index)}
-			if windows.GetIfEntry2Ex(windows.MibIfEntryNormal, &row) == nil {
-				snap.HasIf, snap.IfIn, snap.IfOut = true, row.InOctets, row.OutOctets
-			}
+	c.ifMu.Lock()
+	alias, index := c.ifAlias, c.ifIndex
+	c.ifMu.Unlock()
+	if iface != "" && iface == alias {
+		if row, err := ifRow(index); err == nil {
+			snap.HasIf, snap.IfIn, snap.IfOut = true, row.InOctets, row.OutOctets
 		}
 	}
 	counts, err := connections()
@@ -325,6 +334,7 @@ func (c *Collector) Gateway(context.Context) (platform.Gateway, error) {
 	}
 	defer windows.FreeMibTable(unsafe.Pointer(table))
 	var best platform.Gateway
+	var bestIndex uint32
 	bestMetric := ^uint32(0)
 	for _, r := range table.Rows() {
 		if r.DestinationPrefix.PrefixLength != 0 || r.NextHop.Family != afInet {
@@ -336,11 +346,29 @@ func (c *Collector) Gateway(context.Context) (platform.Gateway, error) {
 		}
 		bestMetric = r.Metric
 		best = platform.Gateway{Addr: net.IP(v4.Addr[:]).String()}
-		if ifc, err := net.InterfaceByIndex(int(r.InterfaceIndex)); err == nil {
-			best.Iface = ifc.Name
+		bestIndex = r.InterfaceIndex
+	}
+	if best.Addr != "" {
+		best.Iface = "if" + strconv.Itoa(int(bestIndex))
+		if row, err := ifRow(bestIndex); err == nil {
+			if a := windows.UTF16ToString(row.Alias[:]); a != "" {
+				best.Iface = a
+			}
 		}
+		c.ifMu.Lock()
+		c.ifAlias, c.ifIndex = best.Iface, bestIndex
+		c.ifMu.Unlock()
 	}
 	return best, nil
+}
+
+// ifRow reads one interface's details and counters.
+func ifRow(index uint32) (*windows.MibIfRow2, error) {
+	row := &windows.MibIfRow2{InterfaceIndex: index}
+	if err := windows.GetIfEntry2Ex(windows.MibIfEntryNormal, row); err != nil {
+		return nil, err
+	}
+	return row, nil
 }
 
 // icmpEchoReply is the start of ICMP_ECHO_REPLY; only these fields are read.

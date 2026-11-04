@@ -79,9 +79,6 @@ func Run(ctx context.Context, d Deps, once bool) error {
 	s := &state{d: d, runaway: procscan.NewRunawayTracker(), orphans: map[identity]bool{},
 		meter: selfusage.NewMeter(), errSeen: map[string]time.Time{}}
 
-	if st, ok := d.Col.(collector.Streamer); ok && !once {
-		st.StartNetStream(ctx, time.Duration(d.Cfg.Interval)*time.Second)
-	}
 	gw, err := d.Col.Gateway(ctx)
 	s.logErr("gateway", err)
 	snap, err := d.Col.Net(ctx, gw.Iface)
@@ -165,7 +162,7 @@ func (s *state) cycle(ctx context.Context, once bool) {
 	s.logErr("samples log", s.d.Samples.Append(sample))
 
 	if err == nil && s.det == nil {
-		// The first reading arrived late (e.g. nettop starting slowly):
+		// The first reading failed (e.g. a helper timed out at startup):
 		// seed from it so a restart does not report every app as new.
 		s.det = netrate.NewDetector(cur)
 	} else if err == nil {

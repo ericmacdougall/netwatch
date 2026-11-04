@@ -39,11 +39,13 @@ var (
 	procShowWindow            = user32.NewProc("ShowWindow")
 )
 
-// background lowers our priority and, when Windows created a console just
-// for us (started from a logon task or Run key rather than a terminal),
-// hides and detaches it so no empty window stays on screen.
+// background hides and detaches the console when Windows created one just
+// for us (started from a logon task or Run key rather than a terminal), so
+// no empty window stays on screen. Unlike on Unix the priority is left at
+// normal: Windows priority classes are strict, and a below-normal monitor
+// was starved for tens of seconds on a busy machine, exactly when a
+// runaway process makes monitoring matter.
 func background() {
-	_ = windows.SetPriorityClass(windows.CurrentProcess(), windows.BELOW_NORMAL_PRIORITY_CLASS)
 	var pids [4]uint32
 	n, _, _ := procGetConsoleProcessList.Call(uintptr(unsafe.Pointer(&pids[0])), 4)
 	if n == 1 {

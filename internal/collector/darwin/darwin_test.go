@@ -30,9 +30,6 @@ func TestGatewayAndNetDoNotFail(t *testing.T) {
 	if _, err := c.Gateway(context.Background()); err != nil {
 		t.Skipf("no default route: %v", err)
 	}
-	if testing.Short() {
-		t.Skip("nettop can take tens of seconds to start")
-	}
 	snap, err := c.Net(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)

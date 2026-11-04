@@ -126,7 +126,7 @@ func RenderTaskXML(o platform.ServiceOptions, user string) string {
     <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
-    <Priority>7</Priority>
+    <Priority>6</Priority>
     <RestartOnFailure>
       <Interval>PT1M</Interval>
       <Count>10</Count>
