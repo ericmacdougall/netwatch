@@ -67,14 +67,14 @@ netwatch [--config FILE] [--log-dir DIR] <command>
   run                       sample forever (what the service runs)
   once                      one sample and one process scan, then exit
   report [--since 2h] [--json]
-  orphans [--kill] [--force] [--json]
+  orphans [--pid N,..] [--match RE] [--kill] [--force] [--json]
   tail [-n N] [--no-follow]
   install | uninstall | status [--label NAME]
   config                    print the effective configuration
   version
 ```
 
-Run `netwatch orphans` to see which watched processes are orphaned. Add `--kill` to ask them to exit. On Windows, which has no `SIGTERM`, `--kill` asks politely through `taskkill`. Console programs such as `node` ignore that request, so `--kill --force` is needed, which calls `TerminateProcess`. `--json` prints machine-readable output for scripts and agents:
+Run `netwatch orphans` to see which watched processes are orphaned. Add `--kill` to ask them to exit. `--pid 123,456` or `--match REGEX` limits the listing, and therefore `--kill`, to specific processes, for example ones your own script started. On Windows, which has no `SIGTERM`, `--kill` asks politely through `taskkill`. Console programs such as `node` ignore that request, so `--kill --force` is needed, which calls `TerminateProcess`. `--json` prints machine-readable output for scripts and agents:
 
 ```json
 {

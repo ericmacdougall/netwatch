@@ -12,6 +12,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -39,7 +41,7 @@ Commands:
   once                     take one sample and one process scan, then exit
   report [--since 2h] [--json]
                            summarise the logs for a window (s, m, h or d)
-  orphans [--kill] [--force] [--json]
+  orphans [--pid N,..] [--match RE] [--kill] [--force] [--json]
                            list orphaned watched processes; --kill asks them to
                            exit (SIGTERM on macOS/Linux; on Windows a polite
                            close, or TerminateProcess with --force)
@@ -270,11 +272,17 @@ func (a *app) cmdOrphans(args []string) error {
 	kill := fs.Bool("kill", false, "ask the listed orphans to exit")
 	force := fs.Bool("force", false, "Windows only: TerminateProcess processes that ignore a polite close")
 	asJSON := fs.Bool("json", false, "print JSON")
+	pidList := fs.String("pid", "", "only these PIDs (comma-separated)")
+	match := fs.String("match", "", "only orphans whose command line matches this regular expression")
 	if err := parse(fs, args); err != nil {
 		return err
 	}
 	if *force && !*kill {
 		return usageError{errors.New("--force requires --kill")}
+	}
+	filter, err := orphanFilter(*pidList, *match)
+	if err != nil {
+		return usageError{err}
 	}
 	cfg := a.loadConfig()
 	col, _ := collector.New()
@@ -284,7 +292,12 @@ func (a *app) cmdOrphans(args []string) error {
 	if err != nil {
 		return err
 	}
-	orphans := procscan.Orphans(cfg, procs, col.OrphanRule(), self)
+	var orphans []procscan.Process
+	for _, p := range procscan.Orphans(cfg, procs, col.OrphanRule(), self) {
+		if filter(p) {
+			orphans = append(orphans, p)
+		}
+	}
 
 	if !*asJSON {
 		if len(orphans) == 0 {
@@ -310,6 +323,32 @@ func (a *app) cmdOrphans(args []string) error {
 		return enc.Encode(out)
 	}
 	return nil
+}
+
+// orphanFilter narrows the listing, so --kill can target only the
+// processes a caller started instead of every orphan on the machine.
+func orphanFilter(pidList, match string) (func(procscan.Process) bool, error) {
+	pids := map[int]bool{}
+	for _, f := range strings.FieldsFunc(pidList, func(r rune) bool { return r == ',' || r == ' ' }) {
+		n, err := strconv.Atoi(f)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("bad --pid %q", f)
+		}
+		pids[n] = true
+	}
+	var re *regexp.Regexp
+	if match != "" {
+		var err error
+		if re, err = regexp.Compile(match); err != nil {
+			return nil, fmt.Errorf("bad --match: %w", err)
+		}
+	}
+	return func(p procscan.Process) bool {
+		if len(pids) > 0 && !pids[p.PID] {
+			return false
+		}
+		return re == nil || re.MatchString(p.Cmd)
+	}, nil
 }
 
 func (a *app) kill(ctx context.Context, cfg *config.Config, col collector.Collector, orphans []procscan.Process, force, text bool) []record.KillResult {
