@@ -3,6 +3,7 @@
 package incident
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -24,6 +25,12 @@ var T0 = time.Date(2026, 11, 4, 16, 6, 43, 0, time.UTC)
 
 func call(offset time.Duration, agent string, programs ...string) transcript.Call {
 	return transcript.Call{At: T0.Add(-offset), SessionID: tsess, AgentID: agent, Redacted: "cmd", SHA256: strings.Repeat("ab", 32), Programs: programs}
+}
+
+func callArgs(offset time.Duration, agent string, programs, args []string) transcript.Call {
+	c := call(offset, agent, programs...)
+	c.ArgNames = args
+	return c
 }
 
 func ids(cs []Candidate) string {
@@ -156,7 +163,7 @@ func TestCollectRanksTranscriptCandidates(t *testing.T) {
 			t.Errorf("candidate missing from output")
 		}
 	}
-	if !strings.Contains(b.String(), "Candidate 1 (medium, name match true)") {
+	if !strings.Contains(b.String(), "Candidate 1 (medium, strong match)") {
 		t.Errorf("text output: %s", b.String())
 	}
 	// With no samples the candidate becomes the replay's attribution.
@@ -251,5 +258,92 @@ func TestCollectNoNameMatchIsLow(t *testing.T) {
 	rep, _ := Collect(Options{JetsamDir: jetsamFixture, TranscriptRoot: root, Now: time.Now()})
 	if len(rep.Candidates) != 1 || rep.Candidates[0].Confidence != "low" || rep.Candidates[0].NameMatch {
 		t.Fatalf("%+v", rep.Candidates)
+	}
+}
+
+func TestWeakMatchTiers(t *testing.T) {
+	s := time.Second
+	// Order: strong, then weak, then none; closeness inside each tier.
+	got := RankCandidates([]transcript.Call{
+		call(1*s, "none-near", "ls"),
+		callArgs(3*s, "weak-near", []string{"perl"}, []string{"python"}),
+		callArgs(20*s, "weak-far", []string{"xargs"}, []string{"python"}),
+		call(40*s, "strong-far", "python"),
+	}, T0, "Python")
+	if ids(got) != "strong-far,weak-near,weak-far,none-near" {
+		t.Fatalf("tiers: %s", ids(got))
+	}
+	if got[0].MatchKind != "strong" || got[1].MatchKind != "weak" || got[3].MatchKind != "none" {
+		t.Errorf("kinds: %+v", got)
+	}
+	for _, c := range got {
+		if c.Confidence != "low" {
+			t.Errorf("several matches must be low: %+v", c)
+		}
+	}
+	// A single weak match, nothing else matching: medium.
+	got = RankCandidates([]transcript.Call{call(1*s, "none", "ls"), callArgs(15*s, "weak", []string{"perl"}, []string{"python"})}, T0, "python")
+	if got[0].AgentID != "weak" || got[0].Confidence != "medium" || got[0].MatchKind != "weak" || got[1].Confidence != "low" {
+		t.Fatalf("single weak: %+v", got)
+	}
+	// One strong and one weak match: two matches, so low.
+	got = RankCandidates([]transcript.Call{call(5*s, "s", "python"), callArgs(6*s, "w", []string{"x"}, []string{"python"})}, T0, "python")
+	if got[0].Confidence != "low" {
+		t.Fatalf("strong+weak: %+v", got)
+	}
+	// A weak match outside the window does not count toward "single".
+	got = RankCandidates([]transcript.Call{call(10*s, "in", "python"), callArgs(90*s, "out", nil, []string{"python"})}, T0, "python")
+	if len(got) != 1 || got[0].Confidence != "medium" {
+		t.Fatalf("outside-window weak: %+v", got)
+	}
+	// No process name: no weak matches either.
+	if got = RankCandidates([]transcript.Call{callArgs(3*s, "a", nil, []string{""})}, T0, ""); got[0].MatchKind != "none" {
+		t.Fatalf("empty name: %+v", got)
+	}
+}
+
+// A low-confidence top candidate must not become the agent label.
+func TestLowConfidenceCandidateIsNotTheLabel(t *testing.T) {
+	root := t.TempDir()
+	// Two python-invoking calls: two name matches, so low confidence.
+	writeTranscript(t, root,
+		tline("2026-11-04T16:06:35.000Z", "aaaa1111", "python3 one.py"),
+		tline("2026-11-04T16:06:30.000Z", "bbbb2222", "python3 two.py"))
+	rep, _ := Collect(Options{JetsamDir: jetsamFixture, TranscriptRoot: root, Now: time.Now()})
+	if len(rep.Candidates) != 2 || rep.Candidates[0].Confidence != "low" || rep.NameMatches != 2 {
+		t.Fatalf("setup: %+v matches=%d", rep.Candidates, rep.NameMatches)
+	}
+	in := ReplayInputFrom(rep, ModePauseKill)
+	if in.AgentLabel != "" {
+		t.Fatalf("low-confidence candidate became the label: %q", in.AgentLabel)
+	}
+	want := "unknown (top candidate agent aaaa1111 in session 11111111 at 16:06:35Z, low confidence, 2 name matches)"
+	r := ReplayGuard(in)
+	if got := r.Inputs["agent_label"]; got != want {
+		t.Errorf("agent_label = %q, want %q", got, want)
+	}
+	// The replay still runs (eligibility assumed) and says so.
+	var out bytes.Buffer
+	r.Render(&out)
+	for _, s := range []string{"eligibility is assumed, not attributed", "eligibility assumed, not attributed"} {
+		if !strings.Contains(out.String(), s) {
+			t.Errorf("output lacks %q", s)
+		}
+	}
+	if rg := rangeFor(r.Ranges, "observed (linear 0 to peak over 11s)", VariantFast.Name); rg.PauseMin.IsZero() {
+		t.Error("replay did not run under assumed eligibility")
+	}
+	// A medium candidate is the label and the assumption line says attributed.
+	root2 := t.TempDir()
+	writeTranscript(t, root2, tline("2026-11-04T16:06:35.000Z", "cccc3333", "python3 one.py"))
+	rep2, _ := Collect(Options{JetsamDir: jetsamFixture, TranscriptRoot: root2, Now: time.Now()})
+	in2 := ReplayInputFrom(rep2, ModePauseKill)
+	if !strings.Contains(in2.AgentLabel, "cccc3333") || in2.AssumeEligible {
+		t.Errorf("medium candidate: %+v", in2)
+	}
+	var out2 bytes.Buffer
+	ReplayGuard(in2).Render(&out2)
+	if strings.Contains(out2.String(), "assumed, not attributed") {
+		t.Error("attributed replay claims assumed eligibility")
 	}
 }

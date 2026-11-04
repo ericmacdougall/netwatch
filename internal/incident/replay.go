@@ -261,8 +261,13 @@ type ReplayInput struct {
 	RAM           uint64
 	CompressorLim uint64
 	AgentLabel    string // attribution of the culprit; "" means unknown
-	Confidence    string
-	Mode          Mode // "" means pause+kill
+	// AssumeEligible lets the replay run although the culprit is not
+	// attributed (a low-confidence candidate only). The output says the
+	// eligibility is assumed. AgentLabelNote explains the unknown label.
+	AssumeEligible bool
+	AgentLabelNote string
+	Confidence     string
+	Mode           Mode // "" means pause+kill
 	// NewDecider builds the decision step for a variant. Nil uses ReplayRules.
 	NewDecider func(m Mode, v Variant, trackerDisabled bool) Decider
 	PollEvery  time.Duration
@@ -372,10 +377,13 @@ func ReplayGuard(in ReplayInput) *ReplayReport {
 	rep.Inputs = map[string]any{
 		"ram_bytes": in.RAM, "headroom_bytes": headroom, "headroom_source": "first report memoryStatus pages (free+speculative+purgeable+inactive) x page size",
 		"compressor_limit_pages": in.CompressorLim, "poll_interval": in.PollEvery.String(),
-		"reports": len(in.Reports), "mode": string(in.Mode), "agent_label": in.AgentLabel,
+		"reports": len(in.Reports), "mode": string(in.Mode), "agent_label": agentLabelText(in),
 	}
 
-	eligible := in.AgentLabel != ""
+	eligible := in.AgentLabel != "" || in.AssumeEligible
+	if in.AgentLabel == "" && in.AssumeEligible {
+		rep.Notes = append(rep.Notes, "eligibility assumed, not attributed: the top transcript candidate is low confidence")
+	}
 	if !eligible {
 		rep.Notes = append(rep.Notes, "attribution unknown, not eligible: the guard takes no action on a group it cannot attribute to an agent")
 	}
@@ -416,7 +424,7 @@ func ReplayGuard(in ReplayInput) *ReplayReport {
 		boundCheck("with the fast path, SIGTERM is at or before onset+4.4s (<= 16:06:58Z on the incident)",
 			obsF.Killed, obsF.TermMin, obsF.TermMax, onset, onset.Add(4400*time.Millisecond)),
 	}
-	if in.AgentLabel == "" {
+	if !eligible {
 		for i := range rep.Checks {
 			rep.Checks[i].Status = "not verified"
 			rep.Checks[i].Detail = "attribution unknown, not eligible: no action simulated"
@@ -438,6 +446,23 @@ func ReplayGuard(in ReplayInput) *ReplayReport {
 	return rep
 }
 
+func agentLabelText(in ReplayInput) string {
+	switch {
+	case in.AgentLabel != "":
+		return in.AgentLabel
+	case in.AgentLabelNote != "":
+		return in.AgentLabelNote
+	}
+	return "unknown"
+}
+
+func eligibilityAssumption(in ReplayInput) string {
+	if in.AgentLabel == "" && in.AssumeEligible {
+		return "The culprit's eligibility is assumed, not attributed: no agent could be established (the top transcript candidate is low confidence), so the replay treats it as an allowlisted, unbudgeted verified tool-shell group; other terms of the growth share are assumed not to grow, so a group that grew 1 GiB or more since the baseline has a 100% share."
+	}
+	return "The culprit is a verified tool-shell group (attribution label supplied), allowlisted, not budgeted; other terms of the growth share are assumed not to grow, so a group that grew 1 GiB or more since the baseline has a 100% share."
+}
+
 func assumptions(in ReplayInput) []string {
 	return []string{
 		"Readings are step-held between jetsam snapshots: before the first non-idle snapshot the host is normal with low compressor use, from it onward pressure is critical and the compressor is at the snapshot's uncompressed/limit ratio.",
@@ -445,7 +470,7 @@ func assumptions(in ReplayInput) []string {
 		fmt.Sprintf("Polls and tracker reads share one %s cadence (the hot cadence) from before onset; results are the min and max over 5 poll phases.", in.PollEvery),
 		"D4 is latched from the ramp model: group at least 0.75 x RAM, growing over 1 GiB/min over two tracker reads, pressure warn or worse.",
 		"The poll that pauses the group also counts as the first poll of path A's window and of the A2 fast path's two consecutive polls.",
-		"The culprit is a verified tool-shell group (attribution label supplied), allowlisted, not budgeted; other terms of the growth share are assumed not to grow, so a group that grew 1 GiB or more since the baseline has a 100% share.",
+		eligibilityAssumption(in),
 		"The AC-6 'without the fast path' bound models path A only, as the spec defines it; path B and the fast path are shown as separate variants. Nothing is signalled and no growth continues after the pause.",
 		"The first jetsam kill is the first non-idle snapshot; jetsam acts on its own clock, so margins to it can be negative. A pause cannot free memory, and a poll-based guard cannot beat an allocation of about 6 GiB/s.",
 	}
@@ -689,8 +714,17 @@ func ReplayInputFrom(rep *Report, mode Mode) ReplayInput {
 	if rep.Estimate != nil && rep.Estimate.Attribution != nil {
 		in.AgentLabel, in.Confidence = rep.Estimate.Attribution.Agent, rep.Estimate.Attribution.Confidence
 	}
+	// Only a medium (or better) candidate becomes the label. A low one is
+	// reported as unknown and the replay assumes eligibility, saying so.
 	if in.AgentLabel == "" && len(rep.Candidates) > 0 {
-		in.AgentLabel, in.Confidence = rep.Candidates[0].Label(), rep.Candidates[0].Confidence
+		top := rep.Candidates[0]
+		if top.Confidence == "medium" || top.Confidence == "high" {
+			in.AgentLabel, in.Confidence = top.Label(), top.Confidence
+		} else {
+			in.AssumeEligible = true
+			in.AgentLabelNote = fmt.Sprintf("unknown (top candidate %s at %s, %s confidence, %d name matches)",
+				top.Label(), top.At.UTC().Format("15:04:05Z"), top.Confidence, rep.NameMatches)
+		}
 	}
 	return in
 }
