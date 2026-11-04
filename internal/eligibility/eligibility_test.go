@@ -689,3 +689,37 @@ func TestTestJobUnderTerminalIsCounted(t *testing.T) {
 		t.Error("the terminal's other child must stay excluded")
 	}
 }
+
+// AC-3: a group's name (used in events, alerts and notifications) never
+// carries the tool shell's `-c` body or a home path; it names the
+// members' commands. The live smoke at 50ee6d2 showed
+// "/bin/zsh -c source /Users/<user>/.claude/shell-snapshots/...".
+func TestGroupNameHasNoShellBodyOrHomePath(t *testing.T) {
+	w := newWorld()
+	w.toolShell(200)
+	w.add(201, 200, 200, 200, "/usr/local/bin/python3", me, false)
+	w.add(202, 201, 200, 200, "/usr/local/bin/python3", me, false)
+	args := map[int][]string{
+		200: {"/bin/zsh", "-c", "source /Users/someone/.claude/shell-snapshots/s.sh && python3 /Users/someone/big.py"},
+		201: {"/usr/local/bin/python3", "/Users/someone/big.py"},
+	}
+	out := Classify(Input{Procs: w.procs, Records: w.recs, SelfPID: 9999, UID: me,
+		Env:  func(pid int, _ ...string) map[string]string { return w.envs[pid] },
+		Args: func(pid int) []string { return args[pid] }})
+	g := group(out, 200)
+	if g == nil {
+		t.Fatal("no tool group")
+	}
+	if g.Cmd != "python3" || strings.Contains(g.Cmd, "-c") || strings.Contains(g.Cmd, "/Users/") {
+		t.Fatalf("group name %q", g.Cmd)
+	}
+	// A shell with no other member is named by the shell.
+	w2 := newWorld()
+	w2.toolShell(300)
+	out = Classify(Input{Procs: w2.procs, Records: w2.recs, SelfPID: 9999, UID: me,
+		Env:  func(pid int, _ ...string) map[string]string { return w2.envs[pid] },
+		Args: func(pid int) []string { return []string{"/bin/bash", "-c", "sleep 9 # /Users/someone"} }})
+	if g := group(out, 300); g == nil || g.Cmd != "bash job" {
+		t.Fatalf("shell-only group name: %+v", g)
+	}
+}

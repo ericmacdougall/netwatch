@@ -16,6 +16,7 @@ import (
 	"github.com/ericmacdougall/netwatch/internal/attrib"
 	"github.com/ericmacdougall/netwatch/internal/budget"
 	"github.com/ericmacdougall/netwatch/internal/guard"
+	"github.com/ericmacdougall/netwatch/internal/redact"
 	"github.com/ericmacdougall/netwatch/internal/resources"
 	"github.com/ericmacdougall/netwatch/internal/tracker"
 	"github.com/ericmacdougall/netwatch/internal/watcher"
@@ -339,11 +340,31 @@ func itoa(n int) string {
 	return string(b[i:])
 }
 
-func (c *classifier) cmd(pid int) string {
-	if c.in.Args == nil {
-		return ""
+// jobName names a group in events, alerts and notifications: the command
+// names of its members, without arguments. A tool shell's command line is
+// `zsh -c <the agent's command>` with paths under home, and AC-3 keeps
+// both out of notifications. A group of shells only is "<shell> job".
+func jobName(ms []*resources.Proc) string {
+	var names []string
+	seen := map[string]bool{}
+	for _, m := range ms {
+		n := path.Base(m.Name)
+		if m.Exe != "" && isShell(m.Exe) || shells[n] || n == "" || n == "." || seen[n] {
+			continue
+		}
+		seen[n] = true
+		if names = append(names, n); len(names) == 3 {
+			break
+		}
 	}
-	return attrib.CommandLine(c.in.Args(pid), 120)
+	if len(names) == 0 {
+		n := "shell"
+		if len(ms) > 0 && ms[0].Name != "" {
+			n = path.Base(ms[0].Name)
+		}
+		return redact.Display(n + " job")
+	}
+	return redact.Display(strings.Join(names, ", "))
 }
 
 func (c *classifier) groups(out *Output) {
@@ -375,7 +396,7 @@ func (c *classifier) groups(out *Output) {
 			}
 			g := tracker.GroupInfo{PGID: r.PID, LeaderStart: r.Start, Tier: guard.TierTool,
 				ClaudeVer: ver, Allowlisted: c.allowlisted(ver), FromWatcher: true,
-				EnvOK: c.envOK(ms, r.ClaudePID), Budget: c.budgetFor(r.PID), Cmd: c.cmd(ms[0].PID)}
+				EnvOK: c.envOK(ms, r.ClaudePID), Budget: c.budgetFor(r.PID), Cmd: jobName(ms)}
 			if c.in.Agent != nil {
 				g.Agent = c.in.Agent(r.ClaudePID, r.Start)
 			}
@@ -395,7 +416,7 @@ func (c *classifier) groups(out *Output) {
 				continue
 			}
 			out.Groups = append(out.Groups, tracker.GroupInfo{PGID: r.PID, LeaderStart: leaderStart(c, r.PID, ms),
-				Tier: guard.TierUnverified, FromWatcher: true, Budget: c.budgetFor(r.PID), Cmd: c.cmd(ms[0].PID)})
+				Tier: guard.TierUnverified, FromWatcher: true, Budget: c.budgetFor(r.PID), Cmd: jobName(ms)})
 			taken[r.PID] = true
 			out.Reasons[r.PID] = "child exited before it was seen: pause only, kill not available"
 		}
@@ -428,7 +449,7 @@ func (c *classifier) groups(out *Output) {
 		ms := byPG[pg]
 		sort.Slice(ms, func(i, j int) bool { return ms[i].PID < ms[j].PID })
 		out.Groups = append(out.Groups, tracker.GroupInfo{PGID: pg, LeaderStart: leaderStart(c, pg, ms),
-			Tier: guard.TierFallback, Budget: c.budgetFor(pg), Cmd: c.cmd(ms[0].PID)})
+			Tier: guard.TierFallback, Budget: c.budgetFor(pg), Cmd: jobName(ms)})
 		out.Reasons[pg] = "CLAUDECODE=1 without a recorded tool shell (setsid job or missed watcher event): pause only, kill not available"
 	}
 	sort.Slice(out.Groups, func(i, j int) bool { return out.Groups[i].PGID < out.Groups[j].PGID })
