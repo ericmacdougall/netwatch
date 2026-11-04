@@ -280,9 +280,9 @@ func (e *Executor) applyResume(a Action) {
 	ms := append([]Member(nil), a.Members...)
 	leader, rest := orderMembers(a.PGID, ms)
 	n := 0
-	ok, _ := e.sendTo("", append(leader, rest...), sigCONT)
+	ok, failed := e.sendTo("", append(leader, rest...), sigCONT)
 	n += ok
-	e.events().Event(record.GuardResume, map[string]any{"pgid": a.PGID, "reason": a.Reason, "members": n, "cmd": a.Cmd, "agent": a.Agent})
+	e.events().Event(record.GuardResume, map[string]any{"pgid": a.PGID, "reason": a.Reason, "members": n, "not_resumed": failed, "cmd": a.Cmd, "agent": a.Agent})
 	e.notify(fmt.Sprintf("resume-%d", a.PGID), "Memory guard resumed a job", fmt.Sprintf("%s resumed (pgid %d): %s", a.Cmd, a.PGID, a.Reason))
 }
 

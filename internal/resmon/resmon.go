@@ -20,6 +20,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -110,16 +112,17 @@ type Loop struct {
 	det  *danger.Detector
 	view guard.ReaderView
 
-	mu       sync.Mutex
-	cls      Classification
-	procs    []resources.Proc
-	scanAt   time.Time
-	scanOK   bool
-	nextScan time.Time
-	nextSamp time.Time
-	selfErr  error
-	jetsamAt time.Time // newest report already seen
-	d5       bool      // a new non-idle report arrived since the last poll
+	mu         sync.Mutex
+	cls        Classification
+	procs      []resources.Proc
+	scanAt     time.Time
+	scanOK     bool
+	nextScan   time.Time
+	nextSamp   time.Time
+	selfErr    error
+	jetsamAt   time.Time       // newest report already seen
+	jetsamSeen map[string]bool // reports already parsed (name|size|mtime)
+	d5         bool            // a new non-idle report arrived since the last poll
 }
 
 // New builds a loop. The tracker consults the latest classification for
@@ -196,8 +199,10 @@ func (l *Loop) Tick() (hot bool) {
 	now := l.d.Now()
 	sys, err := l.d.R.System()
 	if err != nil {
-		// No reading, no decision: the guard never acts on a failed read.
+		// No reading, no new decision: the guard never pauses or kills on a
+		// failed read, but the pause time limits still release held groups.
 		l.d.Errs("system", err)
+		l.d.Exec.Apply(l.d.Machine.Step(guard.Snapshot{At: now}))
 		return false
 	}
 	if sys.At.IsZero() {
@@ -308,6 +313,13 @@ func (l *Loop) scan(now time.Time, sys resources.System) {
 	l.nextScan = now.Add(l.d.ScanEvery)
 }
 
+// Daemon bounds for jetsam reports: real reports are 0.5-2.5 MB, and a
+// parsed 16 MiB report can cost over 100 MB of heap (red-team F5).
+const (
+	daemonMaxReport = 4 << 20
+	maxJetsamSeen   = 512
+)
+
 // checkJetsam sets d5 when a new jetsam report with a non-idle kill has
 // appeared. D5 never raises danger alone; it only shortens D1.
 func (l *Loop) checkJetsam() {
@@ -315,12 +327,25 @@ func (l *Loop) checkJetsam() {
 		return
 	}
 	since := l.jetsamAt
-	res, err := jetsam.ScanDir(l.d.JetsamDir, jetsam.ScanLimits{MaxFiles: 4, MaxBytes: 4 * jetsam.MaxReportBytes, Since: since})
+	if l.jetsamSeen == nil || len(l.jetsamSeen) > maxJetsamSeen {
+		l.jetsamSeen = map[string]bool{}
+	}
+	seenKey := func(n string, size int64, mod time.Time) string {
+		return fmt.Sprintf("%s|%d|%d", n, size, mod.UnixNano())
+	}
+	res, err := jetsam.ScanDir(l.d.JetsamDir, jetsam.ScanLimits{MaxFiles: 4, MaxBytes: 4 * daemonMaxReport,
+		MaxReport: daemonMaxReport, Since: since,
+		Seen: func(n string, size int64, mod time.Time) bool { return l.jetsamSeen[seenKey(n, size, mod)] }})
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
 			l.d.Errs("jetsam", err)
 		}
 		return
+	}
+	for _, r := range res.Reports {
+		if fi, err := os.Lstat(r.Path); err == nil {
+			l.jetsamSeen[seenKey(filepath.Base(r.Path), fi.Size(), fi.ModTime())] = true
+		}
 	}
 	for _, r := range res.Reports {
 		if !r.Date.After(l.jetsamAt) {

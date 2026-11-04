@@ -254,3 +254,13 @@ func TestAlertsNameAppAndAgent(t *testing.T) {
 		t.Errorf("aggregate alert: %+v", as)
 	}
 }
+
+// Red-team F6: an aggregate keyed by an absolute exe path is named by
+// its base name only.
+func TestAggregateExeKeyShowsNoPath(t *testing.T) {
+	e := New(Config{}, nil, nil)
+	as := e.Evaluate(Input{Series: []Series{growing("inel:exe:/home/someone/bin/tool", 5<<30, time.Minute)}})
+	if len(as) != 1 || strings.Contains(as[0].Message, "/home/") || !strings.HasPrefix(as[0].Message, "tool is growing") {
+		t.Fatalf("aggregate alert: %+v", as)
+	}
+}

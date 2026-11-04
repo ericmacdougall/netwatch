@@ -16,6 +16,7 @@ import (
 
 	"github.com/ericmacdougall/netwatch/internal/notify"
 	"github.com/ericmacdougall/netwatch/internal/record"
+	"github.com/ericmacdougall/netwatch/internal/redact"
 	"github.com/ericmacdougall/netwatch/internal/resources"
 )
 
@@ -83,10 +84,8 @@ func (s Series) label() string {
 		switch {
 		case pgid != "":
 			name = "job"
-		case strings.HasPrefix(s.Key, "inel:"):
-			name = strings.TrimPrefix(s.Key, "inel:")
 		default:
-			name = s.Key
+			name = redact.DisplayKey(s.Key)
 		}
 	}
 	var parts []string

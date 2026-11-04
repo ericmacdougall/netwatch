@@ -1,6 +1,7 @@
 package guard
 
 import (
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -306,4 +307,26 @@ func contains2(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// Red-team F6: the unprotected alert names an exe-keyed aggregate by its
+// base name, never its absolute path.
+func TestUnprotectedReasonHasNoPath(t *testing.T) {
+	r := newRig(t, ModePauseKill)
+	r.tool(100, 4*gib, 101)
+	key := "exe:/home/someone/bin/tool"
+	r.inel[key] = 6 * gib
+	r.run(3, 2*time.Second, normal)
+	for i := 0; i < 40; i++ {
+		r.inel[key] += gib / 4
+		r.poll(2*time.Second, crit)
+	}
+	found := false
+	for _, ta := range r.timed {
+		if ta.a.Kind == ActUnprotected {
+			found = true
+			must(t, !strings.Contains(ta.a.Reason, "/home/") && strings.Contains(ta.a.Reason, "consumer tool "), "reason %q", ta.a.Reason)
+		}
+	}
+	must(t, found, "no unprotected alert")
 }

@@ -272,6 +272,14 @@ func TestNeverSignalListIsConfigurable(t *testing.T) {
 	if o.Rule[201] != "never:myservice" {
 		t.Fatalf("%v", o.Rule)
 	}
+	// The configured list adds to the built-in one (red-team F8).
+	w.add(202, 200, 200, 200, "/opt/homebrew/bin/qemu-system-aarch64", me, false)
+	w.agentEnv(202, 100)
+	o = Classify(Input{Procs: w.procs, Records: w.recs, UID: me, NeverSignal: []string{"myservice"},
+		Env: func(pid int, _ ...string) map[string]string { return w.envs[pid] }})
+	if o.Rule[202] != "never:qemu*" {
+		t.Fatalf("a configured list must keep the defaults: %v", o.Rule)
+	}
 }
 
 func TestTTYTmuxAndInteractiveShellsExcluded(t *testing.T) {

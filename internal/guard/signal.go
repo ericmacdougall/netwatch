@@ -15,6 +15,10 @@ var (
 	ErrStartMismatch = errors.New("guard: process start time differs, not signalled")
 	// ErrRefused means the target is never signalled (pid 1, ourselves).
 	ErrRefused = errors.New("guard: refusing to signal this pid")
+	// ErrStartUnreadable means the pid exists but its start time could
+	// not be read, so a stop, term or kill was not sent. It is reported,
+	// unlike a mismatch, because the process may be one we hold.
+	ErrStartUnreadable = errors.New("guard: process start time unreadable, not signalled")
 )
 
 // StartReader reads a process start time; resources.Reader adapts to it
@@ -49,10 +53,24 @@ func (o OSSignaller) Signal(pid int, start time.Time, sig syscall.Signal) error 
 	}
 	cur, err := o.Starts.Start(pid)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrStartMismatch, err)
+		if !exists(pid) {
+			return fmt.Errorf("%w: %v", ErrStartMismatch, err)
+		}
+		if sig == sigCONT {
+			// Resuming cannot harm a process, and refusing could leave a
+			// job we stopped frozen with its record already dropped.
+			return kill(pid, sig)
+		}
+		return fmt.Errorf("%w: %v", ErrStartUnreadable, err)
 	}
 	if !sameStart(cur, start) {
 		return ErrStartMismatch
 	}
 	return kill(pid, sig)
+}
+
+// exists reports whether pid is a live process we may see (signal 0).
+func exists(pid int) bool {
+	err := kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }

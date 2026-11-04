@@ -305,3 +305,40 @@ func TestScanDirBounds(t *testing.T) {
 		}
 	})
 }
+
+// Red-team F5: the daemon scans every few seconds. A report older than
+// Since (by modification time) or already seen is not read again, and the
+// per-report cap can be lowered.
+func TestScanDirSkipsOldAndSeenWithoutParsing(t *testing.T) {
+	dir := t.TempDir()
+	old := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	junk := filepath.Join(dir, "JetsamEvent-2026-11-01-000001.ips")
+	if err := os.WriteFile(junk, []byte("junk"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	os.Chtimes(junk, old, old)
+	res, err := ScanDir(dir, ScanLimits{Since: old.Add(time.Hour)})
+	if err != nil || len(res.Skipped) != 0 || len(res.Reports) != 0 {
+		t.Fatalf("an old file was read: %+v %v", res, err)
+	}
+	writeReports(t, dir, 2, 1)
+	seen := map[string]bool{}
+	mark := func(n string, size int64, mod time.Time) bool { return seen[n] }
+	res, _ = ScanDir(dir, ScanLimits{Since: old.Add(time.Hour), Seen: mark})
+	if len(res.Reports) != 2 {
+		t.Fatalf("new reports: %d", len(res.Reports))
+	}
+	for _, r := range res.Reports {
+		seen[filepath.Base(r.Path)] = true
+	}
+	if res, _ = ScanDir(dir, ScanLimits{Since: old.Add(time.Hour), Seen: mark}); len(res.Reports) != 0 {
+		t.Fatalf("seen reports parsed again: %d", len(res.Reports))
+	}
+	seen[filepath.Base(junk)] = true
+	big := filepath.Join(dir, "JetsamEvent-2026-11-04-999999.ips")
+	os.WriteFile(big, make([]byte, 5<<20), 0o600)
+	res, _ = ScanDir(dir, ScanLimits{MaxReport: 4 << 20, Seen: mark})
+	if len(res.Skipped) != 1 || !strings.Contains(res.Skipped[0].Err, "4 MiB") {
+		t.Fatalf("lower cap not applied: %+v", res.Skipped)
+	}
+}

@@ -47,7 +47,7 @@ type Config struct {
 	// Resource guard (GoodQA work-tracker-automatic#35742).
 	GuardMode           string   `json:"guard_mode"`               // "" = platform default
 	GuardClaudeVersions []string `json:"guard_claude_versions"`    // extra Claude versions kill may apply to
-	GuardNeverSignal    []string `json:"guard_never_signal"`       // nil = built-in list
+	GuardNeverSignal    []string `json:"guard_never_signal"`       // added to the built-in list
 	GuardMinShare       float64  `json:"guard_min_share"`          // fraction of RAM, 0.05-1.0
 	GuardGroupRAMFrac   float64  `json:"guard_group_ram_fraction"` // D4 size, 0.25-1.5
 	GuardHeadroomFrac   float64  `json:"guard_headroom_frac"`      // P1 corroboration, 0.02-0.95

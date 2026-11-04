@@ -10,6 +10,7 @@ import (
 	"github.com/ericmacdougall/netwatch/internal/attrib"
 	"github.com/ericmacdougall/netwatch/internal/guard"
 	"github.com/ericmacdougall/netwatch/internal/incident"
+	"github.com/ericmacdougall/netwatch/internal/jetsam"
 	"github.com/ericmacdougall/netwatch/internal/resources"
 	"github.com/ericmacdougall/netwatch/internal/sampler"
 	"github.com/ericmacdougall/netwatch/internal/watcher"
@@ -206,5 +207,48 @@ func TestUnknownSessionIsNotReadEveryScan(t *testing.T) {
 	// reads only on the first sessionTries scans.
 	if perScan[0] <= perScan[5] || perScan[sessionTries] != perScan[5] {
 		t.Fatalf("env reads per scan %v: the session lookup must stop after %d scans", perScan, sessionTries)
+	}
+}
+
+// Red-team F5: a jetsam report is parsed once, not on every scan. The
+// second scan finds it in the seen set (a parse error would be reported
+// through Errs if the file were read again).
+func TestJetsamReportParsedOnce(t *testing.T) {
+	dir := t.TempDir()
+	src := "../jetsam/testdata/incident/JetsamEvent-2026-11-04-161829.ips"
+	b, err := os.ReadFile(src)
+	if err != nil {
+		t.Skip("fixture not present")
+	}
+	p := filepath.Join(dir, filepath.Base(src))
+	if err := os.WriteFile(p, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var errs []string
+	l := &Loop{d: Deps{JetsamDir: dir, Now: func() time.Time { return t0 },
+		Errs: func(w string, e error) { errs = append(errs, w) }}}
+	l.checkJetsam()
+	if len(l.jetsamSeen) != 1 {
+		t.Fatalf("report not marked seen: %v", l.jetsamSeen)
+	}
+	// Same name, size and mtime, but unparseable content: only a re-read
+	// would notice.
+	fi, _ := os.Stat(p)
+	junk := make([]byte, fi.Size())
+	if err := os.WriteFile(p, junk, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	os.Chtimes(p, fi.ModTime(), fi.ModTime())
+	l.jetsamAt = time.Time{} // force the same Since as the first scan
+	before := jetsam.Parses()
+	l.checkJetsam()
+	if n := jetsam.Parses() - before; n != 0 {
+		t.Fatalf("seen report parsed again (%d parses)", n)
+	}
+	if l.d5 {
+		t.Fatal("history must not raise D5")
+	}
+	if len(l.jetsamSeen) != 1 {
+		t.Fatalf("seen set changed: %v", l.jetsamSeen)
 	}
 }
