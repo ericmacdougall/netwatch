@@ -688,7 +688,14 @@ func controls(in ReplayInput, sim func(Ramp, Variant, time.Duration, Mode, bool)
 		}
 	}
 	bound := onset.Add(2400 * time.Millisecond)
-	out = append(out, Check{Name: "control: with the tracker disabled the observed-ramp pause bound fails", Status: passIf(latest.After(bound)),
+	name := "control: with the tracker disabled the observed-ramp pause bound fails"
+	if base := sim(obs, VariantPathA, 0, in.Mode, false); base.Pause.IsZero() {
+		// The guard takes no action at all (for example, attribution
+		// unknown), so this control has nothing to compare against.
+		out = append(out, Check{Name: name, Status: "not verified", Detail: "the guard takes no action in this replay, so the control does not apply"})
+		return out
+	}
+	out = append(out, Check{Name: name, Status: passIf(latest.After(bound)),
 		Detail: fmt.Sprintf("latest pause without the tracker %s, bound %s", ts(latest), ts(bound))})
 	return out
 }

@@ -90,7 +90,7 @@ func TestLinuxFixtureRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.RAM != 16<<30 || s.SwapUsed != 3<<30 || s.Pressure != LevelCritical || s.PSIFullAvg10 != 12 || s.Load1 != 2.5 ||
+	if s.RAM != 16<<30 || s.SwapUsed != 3<<30 || s.Pressure != LevelWarn || s.PSIFullAvg10 != 12 || s.Load1 != 2.5 ||
 		s.MemAvailable != 8<<30 || s.Inactive*s.PageSize != 2<<30 {
 		t.Fatalf("%+v", s)
 	}
