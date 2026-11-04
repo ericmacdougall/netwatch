@@ -44,6 +44,9 @@ type Classification struct {
 	Excluded func(p *resources.Proc, exe string) bool
 	// Claude lists the Claude Code processes found, for the watcher.
 	Claude []resources.Proc
+	// Annotate fills the attribution fields of sample rows (owner app,
+	// agent root, session, agent label). Nil leaves them empty.
+	Annotate func(rows []sampler.Row)
 }
 
 // Classifier turns a full scan into guard groups. It is the only place
@@ -360,6 +363,7 @@ func (l *Loop) sample(now time.Time, sys resources.System, procs []resources.Pro
 	}
 	rec := l.d.Sampler.From(sys, procs, now)
 	l.mu.Lock()
+	annotate := l.cls.Annotate
 	agents := make(map[int]string, len(l.cls.Groups))
 	for _, g := range l.cls.Groups {
 		if g.Agent != "" {
@@ -376,6 +380,10 @@ func (l *Loop) sample(now time.Time, sys resources.System, procs []resources.Pro
 	}
 	label(rec.TopMem)
 	label(rec.TopCPU)
+	if annotate != nil {
+		annotate(rec.TopMem)
+		annotate(rec.TopCPU)
+	}
 	if err := l.d.Resources.Append(rec); err != nil {
 		l.d.Errs("sample write", err)
 	}

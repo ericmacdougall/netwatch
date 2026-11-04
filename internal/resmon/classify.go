@@ -2,12 +2,14 @@ package resmon
 
 import (
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/ericmacdougall/netwatch/internal/attrib"
 	"github.com/ericmacdougall/netwatch/internal/budget"
 	"github.com/ericmacdougall/netwatch/internal/eligibility"
 	"github.com/ericmacdougall/netwatch/internal/resources"
+	"github.com/ericmacdougall/netwatch/internal/sampler"
 	"github.com/ericmacdougall/netwatch/internal/shapecheck"
 	"github.com/ericmacdougall/netwatch/internal/watcher"
 )
@@ -27,9 +29,20 @@ type Elig struct {
 	Labeler      *attrib.Labeler // optional; labels are informational
 	// TestJobPGID is the test daemon's spawned job group (0: none).
 	TestJobPGID int
+	// Home shortens recorded working directories to "~" (optional).
+	Home string
 
 	resolver *attrib.Resolver
-	labels   map[labelKey]string
+	labels   map[labelKey]groupLabel
+}
+
+// ClaudeOwner is the owner_app of Claude Code and everything under it.
+const ClaudeOwner = "Claude Code"
+
+// groupLabel is a group's agent attribution, cached per group.
+type groupLabel struct {
+	label   attrib.Label
+	session string
 }
 
 type labelKey struct {
@@ -52,7 +65,7 @@ func (e *Elig) Classify(scan []resources.Proc, recs []watcher.Record, budgets ma
 		TestJobPGID: e.TestJobPGID,
 	}
 	out := eligibility.Classify(in)
-	e.label(out)
+	labels := e.label(out)
 
 	var claude []resources.Proc
 	for _, p := range scan {
@@ -60,7 +73,8 @@ func (e *Elig) Classify(scan []resources.Proc, recs []watcher.Record, budgets ma
 			claude = append(claude, p)
 		}
 	}
-	return Classification{Groups: out.Groups, OwnerOf: out.OwnerOf, Excluded: out.Excluded, Claude: claude}
+	return Classification{Groups: out.Groups, OwnerOf: out.OwnerOf, Excluded: out.Excluded, Claude: claude,
+		Annotate: e.annotator(scan, labels)}
 }
 
 // allowlist is the configured versions plus every running version the
@@ -93,28 +107,121 @@ func (e *Elig) allowlist(scan []resources.Proc) []string {
 
 // label fills each group's Agent from the hook WAL, once per group: the
 // session id comes from the leader's own environment (tool shells carry
-// it; Claude itself does not).
-func (e *Elig) label(out eligibility.Output) {
+// it; Claude itself does not). It returns the labels by pgid.
+func (e *Elig) label(out eligibility.Output) map[int]groupLabel {
 	if e.Labeler == nil {
-		return
+		return nil
 	}
 	if e.labels == nil || len(e.labels) > maxLabels {
-		e.labels = map[labelKey]string{}
+		e.labels = map[labelKey]groupLabel{}
 	}
+	byPGID := make(map[int]groupLabel, len(out.Groups))
 	for i := range out.Groups {
 		g := &out.Groups[i]
-		if g.Agent != "" {
-			continue
-		}
 		k := labelKey{g.PGID, g.LeaderStart}
-		a, ok := e.labels[k]
+		gl, ok := e.labels[k]
 		if !ok {
 			env := e.R.Env(g.PGID, "CLAUDE_CODE_SESSION_ID")
-			a = e.Labeler.Label(env["CLAUDE_CODE_SESSION_ID"], g.LeaderStart).Agent
-			e.labels[k] = a
+			gl.session = env["CLAUDE_CODE_SESSION_ID"]
+			gl.label = e.Labeler.Label(gl.session, g.LeaderStart)
+			if !sessionOK(gl.session) {
+				gl.session = ""
+			}
+			e.labels[k] = gl
 		}
-		g.Agent = a
+		if g.Agent == "" {
+			g.Agent = gl.label.Agent
+		}
+		byPGID[g.PGID] = gl
 	}
+	return byPGID
+}
+
+// sessionOK accepts only an id-shaped session value for the record.
+func sessionOK(s string) bool {
+	if s == "" || len(s) > 64 {
+		return false
+	}
+	for _, r := range s {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+// annotator fills sample rows from this scan: owner app and agent root
+// from the resolver, session and agent label from the group's cached
+// label, and cwd relative to the agent root's cwd (or with the home
+// directory shortened to ~).
+func (e *Elig) annotator(scan []resources.Proc, labels map[int]groupLabel) func([]sampler.Row) {
+	res, rd, home := e.resolver, e.R, e.Home
+	return func(rows []sampler.Row) {
+		var tbl map[int]resources.Proc
+		rootCwd := map[int]string{}
+		for i := range rows {
+			r := &rows[i]
+			if tbl == nil {
+				tbl = make(map[int]resources.Proc, len(scan))
+				for _, p := range scan {
+					tbl[p.PID] = p
+				}
+			}
+			p, ok := tbl[r.PID]
+			if !ok {
+				continue
+			}
+			in := res.Classify(p, tbl)
+			r.OwnerApp, r.AgentRoot = in.Owner, in.ClaudePID
+			if in.ClaudePID != 0 {
+				r.OwnerApp = ClaudeOwner // not the terminal Claude runs in
+			}
+			if gl, ok := labels[r.PGID]; ok {
+				r.Session = gl.session
+				if r.Agent == "" {
+					r.Agent = gl.label.Agent
+				}
+				if r.Agent == gl.label.Agent {
+					r.Confidence = gl.label.Level()
+				}
+			}
+			root := ""
+			if in.ClaudePID != 0 && in.ClaudePID != r.PID {
+				c, seen := rootCwd[in.ClaudePID]
+				if !seen && rd != nil {
+					c = rd.Cwd(in.ClaudePID)
+					rootCwd[in.ClaudePID] = c
+				}
+				root = c
+			}
+			r.Cwd = relCwd(r.Cwd, root, home)
+		}
+	}
+}
+
+// relCwd shows cwd relative to root ("." or "./sub") when it lies under
+// it, else with home shortened to "~".
+func relCwd(cwd, root, home string) string {
+	if cwd == "" {
+		return ""
+	}
+	if root != "" && root != "/" {
+		if cwd == root {
+			return "."
+		}
+		if strings.HasPrefix(cwd, root+"/") {
+			return "./" + cwd[len(root)+1:]
+		}
+	}
+	if home != "" && home != "/" {
+		if cwd == home {
+			return "~"
+		}
+		if strings.HasPrefix(cwd, home+"/") {
+			return "~/" + cwd[len(home)+1:]
+		}
+	}
+	return cwd
 }
 
 func budgetList(m map[int]budget.Declared) []budget.Declared {

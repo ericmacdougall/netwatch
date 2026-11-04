@@ -19,7 +19,8 @@ import (
 type FileReader interface {
 	// Tail returns at most max trailing bytes of the root-relative file.
 	Tail(rel string, max int64) ([]byte, error)
-	// List returns up to max entry names of the root-relative directory.
+	// List returns up to max entry names of the root-relative directory,
+	// most recently modified first.
 	List(rel string, max int) ([]string, error)
 }
 
@@ -70,7 +71,9 @@ func (d DirReader) Tail(rel string, max int64) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(f, max))
 }
 
-// List implements FileReader.
+// List implements FileReader: the max most recently modified entries,
+// newest first. It reads at most listScan entries; a session with more
+// agent files than that is read partially (bounded work beats a label).
 func (d DirReader) List(rel string, max int) ([]string, error) {
 	p, err := d.resolve(rel)
 	if err != nil {
@@ -86,17 +89,43 @@ func (d DirReader) List(rel string, max int) ([]string, error) {
 	if st, err := f.Stat(); err != nil || !st.IsDir() {
 		return nil, errUnsafe
 	}
-	names, err := f.Readdirnames(max)
+	// Readdir lstats each entry, so a symlink reports its own time.
+	infos, err := f.Readdir(listScan)
 	if err == io.EOF {
 		err = nil
 	}
+	sort.Slice(infos, func(i, j int) bool { return infos[i].ModTime().After(infos[j].ModTime()) })
+	if max >= 0 && len(infos) > max {
+		infos = infos[:max]
+	}
+	names := make([]string, len(infos))
+	for i, fi := range infos {
+		names[i] = fi.Name()
+	}
 	return names, err
 }
+
+// listScan bounds how many directory entries List reads.
+const listScan = 8192
 
 // Label is the agent attribution of one tool shell.
 type Label struct {
 	Agent      string  // "main", "agent:<id>" or ""
 	Confidence float64 // 0 when nothing matched
+}
+
+// Level names the confidence for records: high, medium, low, or "" when
+// nothing matched.
+func (l Label) Level() string {
+	switch {
+	case l.Agent == "" || l.Confidence <= 0:
+		return ""
+	case l.Confidence >= 0.85:
+		return "high"
+	case l.Confidence >= 0.5:
+		return "medium"
+	}
+	return "low"
 }
 
 // Labeler matches a tool shell's start time to the pretool entries the

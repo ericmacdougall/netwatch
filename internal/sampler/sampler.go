@@ -36,11 +36,18 @@ type Row struct {
 	Name      string  `json:"name"`
 	Footprint uint64  `json:"footprint"`
 	CPUPct    float64 `json:"cpu_pct"`
+	SID       int     `json:"sid"`
+	UID       int     `json:"uid"`
 	Cmd       string  `json:"cmd"`
-	Cwd       string  `json:"cwd,omitempty"`
-	// Agent and Confidence are attribution (informational only), filled by the caller.
-	Agent      string  `json:"agent,omitempty"`
-	Confidence float64 `json:"confidence,omitempty"`
+	Cwd       string  `json:"cwd"`
+	// Attribution, informational only, filled by the caller (the daemon's
+	// classifier). Every field is always present so a reader can tell
+	// "unknown" from "not recorded".
+	OwnerApp   string `json:"owner_app"`  // app owning the process tree
+	AgentRoot  int    `json:"agent_root"` // nearest Claude Code ancestor pid, 0 if none
+	Session    string `json:"session"`    // Claude Code session id of the group
+	Agent      string `json:"agent"`      // "main", "agent:<id>" or ""
+	Confidence string `json:"confidence"` // high, medium, low or ""
 }
 
 // SysRecord is the system part of the record.
@@ -176,7 +183,7 @@ func (s *Sampler) rows(procs []resources.Proc, now time.Time) ([]Row, int) {
 		}
 		k := key{p.PID, p.Start.UnixNano()}
 		next[k] = p.CPUTime
-		r := Row{PID: p.PID, PPID: p.PPID, PGID: p.PGID, Start: p.Start.UTC().Format(time.RFC3339), Name: p.Name, Footprint: p.Footprint}
+		r := Row{PID: p.PID, PPID: p.PPID, PGID: p.PGID, SID: p.SID, UID: p.UID, Start: p.Start.UTC().Format(time.RFC3339), Name: p.Name, Footprint: p.Footprint}
 		if prev, ok := s.prev[k]; ok && dt > 0 && p.CPUTime >= prev {
 			r.CPUPct = float64(p.CPUTime-prev) / float64(dt) * 100
 		}
