@@ -168,7 +168,8 @@ func (a *app) startResources(ctx context.Context, d resourceDeps) (<-chan error,
 	errs := rateLimitedErrs(a.stderr)
 
 	mode, _ := effectiveMode(d.cfg, stateDir, runtime.GOOS)
-	m := guard.NewMachine(guardConfig(d.cfg, mode))
+	gc := guardConfig(d.cfg, mode)
+	m := guard.NewMachine(gc)
 	sink := &resmon.Sink{Events: d.events, Guard: eventlog.NewWriter(filepath.Join(stateDir, "guard-events.jsonl"), max)}
 	var sig guard.Signaller = guard.OSSignaller{Starts: guard.ReaderStart{R: r}, Self: os.Getpid()}
 	loopR := resources.Full(r)
@@ -207,6 +208,7 @@ func (a *app) startResources(ctx context.Context, d resourceDeps) (<-chan error,
 	loop := resmon.New(resmon.Deps{
 		R:          loopR,
 		Classifier: elig,
+		Danger:     &gc.Danger,
 		Machine:    m,
 		Exec:       exec,
 		Alerts:     alerts.New(alertsConfig(d.cfg), d.notifier, recordSink{d.events}),
