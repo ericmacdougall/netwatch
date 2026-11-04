@@ -67,11 +67,12 @@ func (a *app) cmdIncident(args []string) error {
 	since := fs.String("since", "", "only reports newer than this (e.g. 24h, 7d)")
 	dir := fs.String("dir", diagDir(), "directory holding JetsamEvent and ResetCounter reports")
 	replay := fs.Bool("replay-guard", false, "replay the guard against the incident timeline")
+	transcripts := fs.String("transcripts", transcriptRoot(), "Claude Code projects directory for candidate tool calls (read-only); empty disables")
 	if err := parse(fs, args); err != nil {
 		return err
 	}
 	now := time.Now()
-	o := incident.Options{LogDir: a.logDir, JetsamDir: *dir, TranscriptRoot: transcriptRoot(),
+	o := incident.Options{LogDir: a.logDir, JetsamDir: *dir, TranscriptRoot: *transcripts,
 		Last: *last, Now: now}
 	if *dir != "" {
 		o.DiagDirs = []string{*dir}
