@@ -70,6 +70,15 @@ type Report struct {
 	Self        *SelfStats     `json:"self,omitempty"`
 	Counts      map[string]int `json:"counts"`
 	Events      []record.Event `json:"events"`
+	// Resources is the memory summary. It is always present; with no
+	// resources.jsonl data it is {"samples": 0}.
+	Resources Resources `json:"resources"`
+}
+
+// WithResources adds the memory summary to r.
+func (r Report) WithResources(recs []ResRecord, evs []GuardEvent) Report {
+	r.Resources = Summarize(recs, evs)
+	return r
 }
 
 // maxTalkers is how many talkers a report lists.
@@ -147,6 +156,11 @@ func Build(since string, from time.Time, samples []record.Sample, events []recor
 		if e.Event == record.Start || e.Event == record.Stop {
 			continue
 		}
+		// Memory and guard events are summarised under Resources; the
+		// network event list renders only the events it understands.
+		if IsMemoryEvent(e.Event) {
+			continue
+		}
 		r.Counts[e.Event]++
 		// Logs written by older versions (or the Python prototype) may hold
 		// unredacted command lines; never print them as stored.
@@ -216,6 +230,7 @@ func (r Report) WriteText(w io.Writer) error {
 			fmt.Fprintf(b, "    %-38s %7g / %7g\n", procscan.Short(t.Proc, 38), t.InKBps, t.OutKBps)
 		}
 	}
+	r.Resources.writeMemory(b)
 	for _, e := range r.Events {
 		fmt.Fprintf(b, "  %s %-12s", e.TS, e.Event)
 		switch e.Event {
