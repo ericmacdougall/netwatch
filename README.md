@@ -67,14 +67,14 @@ netwatch [--config FILE] [--log-dir DIR] <command>
   run                       sample forever (what the service runs)
   once                      one sample and one process scan, then exit
   report [--since 2h] [--json]
-  orphans [--pid N,..] [--match RE] [--kill] [--force] [--json]
+  orphans [--pid N,..] [--match RE] [--kill [--all]] [--force] [--json]
   tail [-n N] [--no-follow]
   install | uninstall | status [--label NAME]
   config                    print the effective configuration
   version
 ```
 
-Run `netwatch orphans` to see which watched processes are orphaned. Add `--kill` to ask them to exit. `--pid 123,456` or `--match REGEX` limits the listing, and therefore `--kill`, to specific processes, for example ones your own script started. On Windows, which has no `SIGTERM`, `--kill` asks politely through `taskkill`. Console programs such as `node` ignore that request, so `--kill --force` is needed, which calls `TerminateProcess`. `--json` prints machine-readable output for scripts and agents:
+Run `netwatch orphans` to see which watched processes are orphaned. Some orphans are deliberate, such as a dev server you started with `nohup`, so `--kill` needs explicit targets: `--pid 123,456`, `--match REGEX` (matched against the redacted command line you see in the listing), or `--all` for everything listed. `--kill` refuses to run as root. On Windows, which has no `SIGTERM`, `--kill` asks politely through `taskkill`. Console programs such as `node` ignore that request, so `--kill --force` is needed, which calls `TerminateProcess`. `--json` prints machine-readable output for scripts and agents:
 
 ```json
 {
@@ -174,17 +174,24 @@ Each log file is rotated to `<name>.1` when it passes `max_log_mb`, and only one
 ## Privacy
 
 - **Everything stays on your machine.** netwatch has no telemetry and makes no network connections except the ICMP pings to your gateway and to `internet_host`.
-- **Logs contain process names, PIDs and command lines.** Logs are created readable only by your user (mode `0600` in a `0700` directory on macOS and Linux) and are never sent anywhere.
-- **Secrets in command lines are masked as `[REDACTED]`.** This covers command lines in logs, terminal output, `--json` output and notifications. netwatch recognises common shapes: `--token=…`, `--password …`, `--api-key …` and similar options; `NAME_TOKEN=…`-style assignments and `?password=…` query parameters; `Authorization:` and `Bearer` headers; credentials in URLs; and well-known token formats such as GitHub, Slack, AWS, OpenAI-style and JWT tokens.
-- **Masking is best effort.** A secret passed as a bare positional argument cannot be recognised. Treat the logs as you would your shell history.
+- **Logs contain process names, PIDs and command lines.** Logs are readable only by your user (mode `0600` in a `0700` directory on macOS and Linux) and are never sent anywhere. netwatch tightens the modes of an existing log directory too, for example one left by an older version.
+- **Only your own processes are logged as `ORPHAN` or `RUNAWAY`.** Other users' command lines are not recorded.
+- **Secrets in command lines are masked as `[REDACTED]`.** This covers command lines in logs, terminal output, `report` and `tail` (including records written by older versions), `--json` output and notifications. Control characters are removed too. netwatch recognises common shapes:
+  - options and assignments whose name contains a secret word: `--token=…`, `--password …`, `--api-key …`, `--var API_TOKEN:…`, `GITHUB_TOKEN=…`, `?password=…`, `{"password":"…"}`;
+  - headers such as `Authorization:`, `Cookie:`, `X-Api-Key:` and `Bearer …`;
+  - credentials in URLs (`https://user:pass@host`, `https://TOKEN@host`);
+  - `mysql -p…`, `sshpass -p …`, `redis-cli -a …` and `curl -u user:…`;
+  - well-known token formats: GitHub, GitLab, Slack (tokens and webhooks), AWS, Google, Stripe, npm, Hugging Face, SendGrid, OpenAI-style and JWTs.
+- **Masking is best effort.** A secret passed as a bare positional argument cannot be recognised. Because `ps` and `/proc` drop quotes, only the first word of a multi-word secret value is masked. Treat the logs as you would your shell history.
+- **Upgrading from the Python prototype:** its `stdout.log` copy of the events was written without redaction. netwatch no longer writes it and `install` tells you when it is still there; delete it when you no longer need it.
 - **Notifications go to the local notification system:** `osascript` on macOS, `notify-send` on Linux, or a PowerShell toast on Windows. Their text is passed as data, never as script.
 
 ## Limitations by platform
 
 ### macOS
 
-- Per-process bytes come from `nettop`, which runs continuously in logging mode, so one `nettop` process lives alongside netwatch. `nettop` truncates process names to about 15 characters, and that is the name `NEW_NET_APP` and the talkers list show.
-- With many open network flows, `nettop` can take up to about 30 seconds to start. Samples taken in that time have no traffic data, and netwatch learns which apps are already online from the first data it receives.
+- Per-process bytes come from one `nettop -n` sample per interval. `-n` (no reverse DNS) matters: without it `nettop` took 30 seconds per sample on a machine with slow DNS. `nettop` truncates process names to about 15 characters, and that is the name `NEW_NET_APP` and the talkers list show.
+- An installed browser's `chrome_crashpad_handler` always detaches to `launchd`, so it is ignored by default. Handlers from Playwright or Puppeteer browser caches are still reported.
 - Processes are read with `ps`. `ps` CPU is a decaying average, not an exact per-interval figure.
 - Only IPv4 default routes are used to find the gateway.
 
@@ -207,11 +214,13 @@ Each log file is rotated to `<name>.1` when it passes `max_log_mb`, and only one
 - Processes that cannot be opened, such as other users' or protected processes, have no command line, start time or memory figure. They are never reported as orphans.
 - `--kill` without `--force` uses `taskkill`, which only closes windowed programs. Console programs need `--force`, which calls `TerminateProcess` and gives them no chance to clean up.
 - Notifications use a PowerShell toast, which briefly starts `powershell.exe`, at most once per cooldown.
+- Release binaries are not code-signed. During testing, Microsoft Defender's cloud heuristics once flagged an unsigned development build after it registered its Scheduled Task (`Trojan:Win32/Bearfoos.A!ml`, a generic machine-learning verdict). Later builds were not flagged. If it happens to you, check the binary against `SHA256SUMS` from the release and [report a false positive](https://www.microsoft.com/wdsi/filesubmission) rather than turning Defender off.
+- If Task Scheduler is unavailable, `install` falls back to an `HKCU\…\Run` entry. Reinstalling in that mode does not stop an already running old instance; sign out and back in, or end it in Task Manager.
 - Only IPv4 default routes are used.
 
 ## Resource use
 
-netwatch runs with lowered CPU and I/O priority, and its `self` field in each sample records what it costs. On an Apple-silicon laptop over 30 minutes with default settings, netwatch plus its helpers averaged about 0.2% of one core, and netwatch's resident memory stayed under 20 MB. Run `netwatch report --since 1h` to see the figures for your machine.
+netwatch runs with lowered CPU and I/O priority on macOS and Linux (normal priority on Windows, where a below-normal monitor was starved for tens of seconds on a busy machine), and its `self` field in each sample records what it costs. On an Apple-silicon laptop over 30 minutes with default settings, netwatch plus its helpers averaged about 0.2% of one core, and netwatch's resident memory stayed under 20 MB. Run `netwatch report --since 1h` to see the figures for your machine.
 
 ## Development
 
@@ -231,8 +240,10 @@ netwatch began as a single Python script for macOS. The Go version keeps its eve
 - **Timestamps** are RFC 3339 with a UTC offset. Old offset-less logs are still read as local time.
 - **`pid`** is always a number.
 - **Talker field names:** talker entries use `in_kBps` and `out_kBps`. The old `in_kbps` and `out_kbps` names were kB/s despite their names, and are still read from old logs.
-- **Orphan ownership:** only processes owned by the current user can be orphans. Others could not be signalled anyway.
-- **Kill re-check:** `orphans --kill` re-reads the process table and checks each process's start time and command line before signalling it.
+- **Ownership:** only processes owned by the current user can be orphans or runaways. Others could not be signalled anyway, and their command lines are not ours to log.
+- **Kill re-check:** `orphans --kill` re-reads the process table and checks each process's start time and command line before signalling it, and the platform layer checks the start time again through a kernel handle (Linux pidfd, Windows process handle) or `sysctl` (macOS) immediately before the signal.
+- **Kill targets:** `orphans --kill` needs `--pid`, `--match` or `--all`; the prototype killed everything listed.
+- **Installed browsers' crash reporters** are no longer reported as orphans.
 - **Redaction:** secrets in command lines are redacted everywhere.
 - **Service output:** the service no longer writes every event to `stdout.log`. Only errors go to `stderr.log` or the journal, and repeated errors are logged at most once an hour.
 - **Single instance:** a lock file stops two monitors from writing to the same log directory.

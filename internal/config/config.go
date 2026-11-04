@@ -78,6 +78,14 @@ var commonIgnore = []string{
 	`^/Applications/Google Chrome\.app/Contents/MacOS/Google Chrome -psn`,
 	`^/Applications/[^/]+\.app/Contents/MacOS/[^/ ]+$`,
 	`/Contents/Frameworks/Electron Framework`,
+	// An installed browser's crash reporter always detaches to init by
+	// design, so it would look orphaned for as long as the browser runs.
+	// Handlers from test-browser caches (ms-playwright, puppeteer) are
+	// still reported.
+	`^/Applications/[^/]+\.app/Contents/.*crashpad_handler`,
+	`^/opt/(google|microsoft|brave\.com)/[^ ]*crashpad_handler`,
+	`^/usr/lib(64)?/chromium[^ ]*/[^ ]*crashpad_handler`,
+	`^[A-Za-z]:/Program Files( \(x86\))?/.*crashpad_handler`,
 }
 
 // Default returns the built-in configuration.

@@ -4,8 +4,14 @@ package darwin
 
 import (
 	"context"
+	"errors"
 	"os"
+	"os/exec"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/ericmacdougall/netwatch/internal/procscan"
 )
 
 // Collector tests run the real ps/route/nettop and only run on macOS.
@@ -36,5 +42,38 @@ func TestGatewayAndNetDoNotFail(t *testing.T) {
 	}
 	if !snap.HasBytes || len(snap.Procs) == 0 {
 		t.Fatalf("nettop returned no processes: %+v", snap)
+	}
+}
+
+func TestTerminateRechecksStartTime(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer cmd.Process.Kill()
+	c := New()
+	procs, err := c.Processes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p procscan.Process
+	for _, x := range procs {
+		if x.PID == cmd.Process.Pid {
+			p = x
+		}
+	}
+	if p.PID == 0 {
+		t.Fatal("child not in process table")
+	}
+	stale := p
+	stale.Start = p.Start.Add(-time.Hour) // as if the PID had been reused
+	if err := c.Terminate(stale, false); !errors.Is(err, procscan.ErrChanged) {
+		t.Fatalf("stale start: got %v, want ErrChanged", err)
+	}
+	if err := c.Terminate(p, false); err != nil {
+		t.Fatalf("terminate: %v", err)
+	}
+	if err := cmd.Wait(); err == nil || !strings.Contains(err.Error(), "terminated") {
+		t.Fatalf("child did not die from SIGTERM: %v", err)
 	}
 }

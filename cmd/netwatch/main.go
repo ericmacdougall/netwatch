@@ -25,6 +25,7 @@ import (
 	"github.com/ericmacdougall/netwatch/internal/notify"
 	"github.com/ericmacdougall/netwatch/internal/procscan"
 	"github.com/ericmacdougall/netwatch/internal/record"
+	"github.com/ericmacdougall/netwatch/internal/redact"
 	"github.com/ericmacdougall/netwatch/internal/report"
 )
 
@@ -41,7 +42,7 @@ Commands:
   once                     take one sample and one process scan, then exit
   report [--since 2h] [--json]
                            summarise the logs for a window (s, m, h or d)
-  orphans [--pid N,..] [--match RE] [--kill] [--force] [--json]
+  orphans [--pid N,..] [--match RE] [--kill [--all]] [--force] [--json]
                            list orphaned watched processes; --kill asks them to
                            exit (SIGTERM on macOS/Linux; on Windows a polite
                            close, or TerminateProcess with --force)
@@ -273,12 +274,26 @@ func (a *app) cmdOrphans(args []string) error {
 	force := fs.Bool("force", false, "Windows only: TerminateProcess processes that ignore a polite close")
 	asJSON := fs.Bool("json", false, "print JSON")
 	pidList := fs.String("pid", "", "only these PIDs (comma-separated)")
-	match := fs.String("match", "", "only orphans whose command line matches this regular expression")
+	match := fs.String("match", "", "only orphans whose (redacted) command line matches this regular expression")
+	all := fs.Bool("all", false, "with --kill: signal every listed orphan")
 	if err := parse(fs, args); err != nil {
 		return err
 	}
 	if *force && !*kill {
 		return usageError{errors.New("--force requires --kill")}
+	}
+	if *all && !*kill {
+		return usageError{errors.New("--all requires --kill")}
+	}
+	// Some orphans are deliberate (a nohup'd dev server, a daemon), so a
+	// kill must name its targets or explicitly accept the whole list.
+	if *kill && *pidList == "" && *match == "" && !*all {
+		return usageError{errors.New("--kill needs --pid, --match or --all; run `netwatch orphans` first to see the list")}
+	}
+	if *kill && os.Geteuid() == 0 { // Geteuid is -1 on Windows
+		// As root every system daemon is "owned", and launchd/init is the
+		// normal parent of all of them.
+		return errors.New("refusing --kill as root; run netwatch as the user who owns the processes")
 	}
 	filter, err := orphanFilter(*pidList, *match)
 	if err != nil {
@@ -347,7 +362,9 @@ func orphanFilter(pidList, match string) (func(procscan.Process) bool, error) {
 		if len(pids) > 0 && !pids[p.PID] {
 			return false
 		}
-		return re == nil || re.MatchString(p.Cmd)
+		// Match what the user sees: secrets are masked in every listing,
+		// so they must not be selectable (or probe-able) by pattern either.
+		return re == nil || re.MatchString(redact.Display(p.Cmd))
 	}, nil
 }
 
@@ -402,11 +419,16 @@ func (a *app) cmdConfig(args []string) error {
 	return enc.Encode(cfg)
 }
 
+var labelRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`)
+
 func (a *app) cmdService(cmd string, args []string) error {
 	fs := a.flags(cmd)
 	label := fs.String("label", "", "service name (default: platform-specific)")
 	if err := parse(fs, args); err != nil {
 		return err
+	}
+	if *label != "" && !labelRe.MatchString(*label) {
+		return usageError{fmt.Errorf("bad --label %q: use letters, digits, '.', '_' and '-'", *label)}
 	}
 	_, svc := collector.New()
 	var msg string
@@ -429,7 +451,29 @@ func (a *app) cmdService(cmd string, args []string) error {
 		if a.logDirFlagSet || os.Getenv(config.EnvLogDir) != "" {
 			gargs = append(gargs, "--log-dir", logDir)
 		}
+		// Service definitions are line-based (systemd) or XML; a newline
+		// in a path would let it add directives.
+		for _, v := range append([]string{exe, logDir}, gargs...) {
+			if strings.ContainsAny(v, "\r\n\x00") {
+				return fmt.Errorf("refusing a path with a line break or NUL: %q", v)
+			}
+		}
+		// Tighten an existing log directory first: an older version (or
+		// the Python prototype) may have left world-readable files there.
+		var existing []string
+		for _, n := range []string{"events.jsonl", "events.jsonl.1", "samples.jsonl", "samples.jsonl.1", "stderr.log", "stdout.log"} {
+			existing = append(existing, filepath.Join(logDir, n))
+		}
+		if serr := eventlog.Secure(logDir, existing...); serr != nil {
+			return fmt.Errorf("secure log dir: %w", serr)
+		}
 		msg, err = svc.Install(collector.ServiceOptions{Exe: exe, Args: gargs, LogDir: logDir, Label: *label})
+		if err == nil {
+			if _, serr := os.Stat(filepath.Join(logDir, "stdout.log")); serr == nil {
+				msg += "\nnote: " + filepath.Join(logDir, "stdout.log") + " is from an older version, is no longer written," +
+					" and may contain unredacted command lines; delete it when you no longer need it"
+			}
+		}
 	case "uninstall":
 		msg, err = svc.Uninstall(*label)
 	case "status":

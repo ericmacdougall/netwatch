@@ -3,6 +3,7 @@ package eventlog
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -76,8 +77,12 @@ func TestReadSinceFiltersAndToleratesJunk(t *testing.T) {
 		`{"ts":"` + recent.Format(legacyFormat) + `","n":3}`, // prototype format
 		`{"ts":"` + recent.Format(TimeFormat) + `","n":4}`,
 		`{"ts":"` + recent.Format(TimeFormat) + `","n":5`, // torn write, no newline
-		strings.Repeat("x", 200<<10),                      // overlong line
+		strings.Repeat("x", 200<<10),                      // long junk line
 		`{"ts":"` + recent.Format(TimeFormat) + `","n":6}`,
+		// A valid record longer than the read buffer (a big ORPHANS_KILLED).
+		`{"ts":"` + recent.Format(TimeFormat) + `","n":7,"pad":"` + strings.Repeat("p", 300<<10) + `"}`,
+		strings.Repeat("y", maxLine+10), // over the limit: skipped
+		`{"ts":"` + recent.Format(TimeFormat) + `","n":8}`,
 	}
 	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o600); err != nil {
 		t.Fatal(err)
@@ -90,8 +95,8 @@ func TestReadSinceFiltersAndToleratesJunk(t *testing.T) {
 	for _, r := range got {
 		ns = append(ns, r.N)
 	}
-	if len(ns) != 3 || ns[0] != 3 || ns[1] != 4 || ns[2] != 6 {
-		t.Fatalf("got %v, want [3 4 6]", ns)
+	if want := []int{3, 4, 6, 7, 8}; !reflect.DeepEqual(ns, want) {
+		t.Fatalf("got %v, want %v", ns, want)
 	}
 }
 
@@ -111,5 +116,31 @@ func TestParseTime(t *testing.T) {
 	}
 	if _, ok := ParseTime("yesterday"); ok {
 		t.Fatal("junk accepted")
+	}
+}
+
+func TestAppendTightensExistingPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix permission bits")
+	}
+	dir := filepath.Join(t.TempDir(), "logs")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "events.jsonl")
+	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil { // as the prototype left it
+		t.Fatal(err)
+	}
+	if err := NewWriter(path, 1<<20).Append(rec{TS: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	for p, want := range map[string]os.FileMode{dir: 0o700, path: 0o600} {
+		st, err := os.Stat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := st.Mode().Perm(); got != want {
+			t.Errorf("%s: mode %o, want %o", p, got, want)
+		}
 	}
 }

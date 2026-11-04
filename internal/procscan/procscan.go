@@ -125,7 +125,7 @@ type identity struct {
 	start time.Time
 }
 
-// RunawayTracker flags watched processes that stay hot for several scans or
+// RunawayTracker flags watched, user-owned processes that stay hot for several scans or
 // exceed an RSS ceiling. Each process is reported at most once per reason
 // until it cools down (CPU) or exits.
 type RunawayTracker struct {
@@ -149,7 +149,9 @@ func (r *RunawayTracker) Scan(cfg *config.Config, procs []Process, self int) []R
 	var flagged []Runaway
 	live := map[identity]bool{}
 	for _, p := range procs {
-		if p.PID == self || !config.MatchAny(cfg.Watch, p.MatchText()) {
+		// Other users' processes are skipped: their command lines are not
+		// ours to log, and we could not act on them anyway.
+		if p.PID == self || !p.Own || !config.MatchAny(cfg.Watch, p.MatchText()) {
 			continue
 		}
 		id := identity{p.PID, p.Start}

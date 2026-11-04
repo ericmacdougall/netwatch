@@ -16,6 +16,7 @@ import (
 	"github.com/ericmacdougall/netwatch/internal/health"
 	"github.com/ericmacdougall/netwatch/internal/procscan"
 	"github.com/ericmacdougall/netwatch/internal/record"
+	"github.com/ericmacdougall/netwatch/internal/redact"
 )
 
 var sinceRe = regexp.MustCompile(`^(\d+)([smhd])$`)
@@ -95,10 +96,11 @@ func Build(since string, from time.Time, samples []record.Sample, events []recor
 		r.AvgInKBps += s.InKBps
 		r.AvgOutKBps += s.OutKBps
 		for _, t := range s.Top {
-			a := talk[t.Proc]
+			name := redact.Display(t.Proc)
+			a := talk[name]
 			if a == nil {
-				a = &TalkerAvg{Proc: t.Proc}
-				talk[t.Proc] = a
+				a = &TalkerAvg{Proc: name}
+				talk[name] = a
 			}
 			a.InKBps += t.InKBps
 			a.OutKBps += t.OutKBps
@@ -146,6 +148,10 @@ func Build(since string, from time.Time, samples []record.Sample, events []recor
 			continue
 		}
 		r.Counts[e.Event]++
+		// Logs written by older versions (or the Python prototype) may hold
+		// unredacted command lines; never print them as stored.
+		e.Cmd = redact.Display(e.Cmd)
+		e.Proc = redact.Display(e.Proc)
 		r.Events = append(r.Events, e)
 	}
 	r.EventCount = len(r.Events)

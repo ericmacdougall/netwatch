@@ -65,3 +65,38 @@ func TestReportJSONFromEmptyLogDir(t *testing.T) {
 		t.Fatalf("unexpected output: %s", out.String())
 	}
 }
+
+func TestSanitizeLineRedactsLegacyRecords(t *testing.T) {
+	got := string(sanitizeLine([]byte(`{"ts":"x","event":"ORPHAN","cmd":"node --token=abc123secret \u001b[2J"}` + "\n")))
+	if strings.Contains(got, "abc123secret") || strings.Contains(got, "\x1b") || strings.Contains(got, `\u001b`) {
+		t.Fatalf("tail kept a secret or control character: %q", got)
+	}
+	if got := string(sanitizeLine([]byte("plain --password=hunter22\n"))); strings.Contains(got, "hunter22") {
+		t.Fatalf("non-JSON line not redacted: %q", got)
+	}
+}
+
+func TestKillNeedsExplicitTargets(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := run([]string{"orphans", "--kill"}, &out, &errb); code != 2 || !strings.Contains(errb.String(), "--kill needs --pid, --match or --all") {
+		t.Fatalf("bare --kill: code %d, stderr %q", code, errb.String())
+	}
+	errb.Reset()
+	if code := run([]string{"orphans", "--all"}, &out, &errb); code != 2 {
+		t.Fatalf("--all without --kill: code %d", code)
+	}
+}
+
+func TestMatchUsesRedactedCommand(t *testing.T) {
+	f, _ := orphanFilter("", "hunter22")
+	if f(procscan.Process{PID: 5, Cmd: "node --password=hunter22"}) {
+		t.Fatal("--match selected a process by its secret")
+	}
+}
+
+func TestServiceRejectsBadLabel(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := run([]string{"status", "--label", "../x"}, &out, &errb); code != 2 {
+		t.Fatalf("bad label accepted: code %d %q", code, errb.String())
+	}
+}

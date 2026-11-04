@@ -202,7 +202,9 @@ func (c *Collector) Terminate(p procscan.Process, force bool) error {
 		defer unix.Close(fd)
 	}
 	cur, _, ok := c.readProcess(p.PID, boot, uint32(os.Getuid()))
-	if !ok || !cur.Start.Equal(p.Start) {
+	// Compare with the same tolerance as VerifyForKill: the start time is
+	// derived from btime, which moves slightly when NTP steps the clock.
+	if d := cur.Start.Sub(p.Start); !ok || p.Start.IsZero() || d > procscan.StartTolerance || d < -procscan.StartTolerance {
 		return procscan.ErrChanged
 	}
 	if fd >= 0 {

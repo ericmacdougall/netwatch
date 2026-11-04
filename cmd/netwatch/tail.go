@@ -4,11 +4,15 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
+
+	"github.com/ericmacdougall/netwatch/internal/redact"
 )
 
 func (a *app) cmdTail(args []string) error {
@@ -62,7 +66,11 @@ func follow(ctx context.Context, path string, n int, keepGoing bool, w io.Writer
 		if err != nil {
 			return err
 		}
-		_, _ = w.Write(out)
+		for _, line := range bytes.SplitAfter(out, []byte("\n")) {
+			if len(line) > 0 {
+				_, _ = w.Write(sanitizeLine(line))
+			}
+		}
 		off = size
 	} else if !os.IsNotExist(err) {
 		return err
@@ -97,7 +105,7 @@ func follow(ctx context.Context, path string, n int, keepGoing bool, w io.Writer
 			for {
 				line, err := r.ReadBytes('\n')
 				if len(line) > 0 && line[len(line)-1] == '\n' {
-					_, _ = w.Write(line)
+					_, _ = w.Write(sanitizeLine(line))
 					off += int64(len(line))
 				}
 				if err != nil {
@@ -107,4 +115,35 @@ func follow(ctx context.Context, path string, n int, keepGoing bool, w io.Writer
 		}
 		f.Close()
 	}
+}
+
+// sanitizeLine redacts every string in one JSONL record before printing it.
+// Records written by older versions or the Python prototype may hold
+// unredacted command lines. A line that is not JSON is redacted as text.
+func sanitizeLine(line []byte) []byte {
+	var v any
+	if err := json.Unmarshal(line, &v); err != nil {
+		return []byte(redact.Display(strings.TrimRight(string(line), "\r\n")) + "\n")
+	}
+	out, err := json.Marshal(redactValue(v))
+	if err != nil {
+		return []byte("\n")
+	}
+	return append(out, '\n')
+}
+
+func redactValue(v any) any {
+	switch t := v.(type) {
+	case string:
+		return redact.Display(t)
+	case []any:
+		for i := range t {
+			t[i] = redactValue(t[i])
+		}
+	case map[string]any:
+		for k, x := range t {
+			t[k] = redactValue(x)
+		}
+	}
+	return v
 }

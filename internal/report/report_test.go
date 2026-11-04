@@ -113,3 +113,11 @@ func TestBuildEmpty(t *testing.T) {
 		t.Fatalf("empty lists should encode as [] for scripts: %s", b)
 	}
 }
+
+func TestBuildRedactsLegacyRecords(t *testing.T) {
+	events := []record.Event{{TS: "2026-01-01T00:00:00Z", Event: record.Orphan, Cmd: "node a.js --token=abc123secret\x1b[2J"}}
+	r := Build("1h", time.Time{}, nil, events)
+	if got := r.Events[0].Cmd; strings.Contains(got, "abc123secret") || strings.Contains(got, "\x1b") {
+		t.Fatalf("report kept a secret or control character: %q", got)
+	}
+}

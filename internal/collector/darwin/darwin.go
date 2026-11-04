@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/ericmacdougall/netwatch/internal/execx"
 	"github.com/ericmacdougall/netwatch/internal/health"
 	"github.com/ericmacdougall/netwatch/internal/netrate"
@@ -80,7 +82,28 @@ func (c *Collector) Terminate(p procscan.Process, force bool) error {
 	if force {
 		return fmt.Errorf("--force is only meaningful on Windows; netwatch sends SIGTERM only")
 	}
+	// Re-check the process immediately before signalling. VerifyForKill
+	// compared a ps snapshot taken moments earlier; the kernel's start
+	// time (microsecond resolution) and owner narrow the window in which a
+	// reused PID could be hit to the gap between this call and kill(2).
+	kp, err := unix.SysctlKinfoProc("kern.proc.pid", p.PID)
+	if err != nil {
+		return fmt.Errorf("read process: %w", err)
+	}
+	st := kp.Proc.P_starttime
+	start := time.Unix(int64(st.Sec), int64(st.Usec)*1000)
+	if kp.Proc.P_pid != int32(p.PID) || kp.Eproc.Pcred.P_ruid != uint32(os.Getuid()) ||
+		p.Start.IsZero() || absDuration(start.Sub(p.Start)) > procscan.StartTolerance {
+		return procscan.ErrChanged
+	}
 	return syscall.Kill(p.PID, syscall.SIGTERM)
+}
+
+func absDuration(d time.Duration) time.Duration {
+	if d < 0 {
+		return -d
+	}
+	return d
 }
 
 // Notify shows a notification through osascript. Text is passed as argv,

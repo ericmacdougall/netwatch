@@ -280,3 +280,18 @@ func TestShortAndBaseName(t *testing.T) {
 		t.Fatalf("BaseName = %q", got)
 	}
 }
+
+func TestRunawaySkipsOtherUsers(t *testing.T) {
+	cfg := testConfig(t)
+	r := NewRunawayTracker()
+	p := proc(10, 1, time.Hour, "node big.js")
+	p.RSSMB = cfg.RunawayRSSMB + 1
+	p.Own = false
+	if got := r.Scan(cfg, []Process{p}, 1); len(got) != 0 {
+		t.Fatalf("another user's process was flagged: %v", got)
+	}
+	p.Own = true
+	if got := r.Scan(cfg, []Process{p}, 1); len(got) != 1 {
+		t.Fatalf("own process over the RSS ceiling not flagged: %v", got)
+	}
+}

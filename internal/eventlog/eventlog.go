@@ -33,7 +33,8 @@ type Writer struct {
 	Path     string
 	MaxBytes int64
 
-	mu sync.Mutex
+	mu      sync.Mutex
+	checked bool // Secure has run for this writer
 }
 
 // NewWriter returns a Writer for path.
@@ -50,8 +51,11 @@ func (w *Writer) Append(rec any) error {
 	line = append(line, '\n')
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if err := os.MkdirAll(filepath.Dir(w.Path), 0o700); err != nil {
-		return err
+	if !w.checked {
+		if err := Secure(filepath.Dir(w.Path), w.Path, w.Path+".1"); err != nil {
+			return err
+		}
+		w.checked = true
 	}
 	if err := w.rotateIfNeeded(); err != nil {
 		return err
@@ -82,6 +86,27 @@ func (w *Writer) rotateIfNeeded() error {
 	// os.Rename replaces the old generation atomically on Unix and, via
 	// MoveFileEx, on Windows.
 	return os.Rename(w.Path, w.Path+".1")
+}
+
+// Secure creates dir (0700) and tightens dir and any existing files to
+// owner-only access. MkdirAll and OpenFile set modes only on creation, so
+// logs left by an older version (the prototype wrote 0644 files in a 0755
+// directory) would otherwise stay readable by other local users. On Windows
+// Chmod only toggles the read-only bit; the per-user profile directory
+// already restricts access.
+func Secure(dir string, files ...string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return err
+	}
+	for _, f := range files {
+		if err := os.Chmod(f, 0o600); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
 }
 
 // ParseTime parses a record timestamp in the current or legacy format.
@@ -131,22 +156,31 @@ func ReadSince[T any](path string, cutoff time.Time, ts func(T) string) ([]T, er
 
 func scan(r io.Reader, fn func([]byte)) error {
 	br := bufio.NewReaderSize(r, 64<<10)
+	var long []byte // a line longer than the buffer, assembled up to maxLine
+	tooLong := false
 	for {
-		line, err := br.ReadSlice('\n')
+		chunk, err := br.ReadSlice('\n')
 		if errors.Is(err, bufio.ErrBufferFull) {
-			// Overlong line: skip to its end.
-			for errors.Is(err, bufio.ErrBufferFull) {
-				_, err = br.ReadSlice('\n')
-			}
-			if err == io.EOF {
-				return nil
-			}
-			if err != nil {
-				return err
+			if !tooLong {
+				long = append(long, chunk...)
+				if len(long) > maxLine {
+					long, tooLong = nil, true
+				}
 			}
 			continue
 		}
-		if len(line) > 0 && len(line) <= maxLine {
+		line := chunk
+		if long != nil || tooLong {
+			if !tooLong {
+				long = append(long, chunk...)
+			}
+			line = long
+			if tooLong || len(line) > maxLine {
+				line = nil
+			}
+			long, tooLong = nil, false
+		}
+		if len(line) > 0 {
 			fn(line)
 		}
 		if err == io.EOF {

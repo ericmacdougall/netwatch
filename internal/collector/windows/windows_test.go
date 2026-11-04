@@ -5,6 +5,7 @@ package windows
 import (
 	"context"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -53,13 +54,24 @@ func TestGatewayNetAndPing(t *testing.T) {
 	}
 }
 
-// TestNotifyScriptParses runs the toast script. Without an interactive
-// desktop (CI, ssh) the toast API itself may refuse, so only a PowerShell
-// parse error fails the test.
-func TestNotifyScriptParses(t *testing.T) {
-	err := New().Notify("test", "netwatch toast test")
-	if err != nil && strings.Contains(err.Error(), "ParserError") {
-		t.Fatalf("toast script does not parse: %v", err)
+// TestToastScriptParses checks the toast script with PowerShell's own
+// parser, without showing a toast. A broken script is the control: it must
+// report errors, or the check would pass vacuously.
+func TestToastScriptParses(t *testing.T) {
+	parseErrors := func(script string) string {
+		cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+			`$e = $null; [void][System.Management.Automation.Language.Parser]::ParseInput($env:NW_SCRIPT, [ref]$null, [ref]$e); $e.Count`)
+		cmd.Env = append(os.Environ(), "NW_SCRIPT="+script)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("powershell: %v", err)
+		}
+		return strings.TrimSpace(string(out))
 	}
-	t.Logf("notify: %v", err)
+	if n := parseErrors(toastScript + "\n$x = ("); n == "0" {
+		t.Fatal("control: a broken script reported no parse errors")
+	}
+	if n := parseErrors(toastScript); n != "0" {
+		t.Fatalf("toast script has %s parse errors", n)
+	}
 }

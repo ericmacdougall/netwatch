@@ -249,8 +249,9 @@ func (s *state) scanProcesses(ctx context.Context) {
 	}
 }
 
-// CleanCmd redacts and truncates a command line for logs and output.
-func CleanCmd(cmd string) string { return procscan.Short(redact.String(cmd), CmdLen) }
+// CleanCmd redacts, strips control characters from and truncates a command
+// line for logs and output.
+func CleanCmd(cmd string) string { return procscan.Short(redact.Display(cmd), CmdLen) }
 
 func hours(d time.Duration) float64 { return math.Round(d.Hours()*10) / 10 }
 
