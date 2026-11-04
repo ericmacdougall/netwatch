@@ -84,12 +84,15 @@ func DefaultConfig(mode Mode) Config {
 func (m Mode) canPause() bool { return m == ModePause || m == ModePauseKill }
 func (m Mode) canKill() bool  { return m == ModePauseKill }
 
-// DefaultModeFor returns the platform default: darwin pause+kill, linux
-// alert, windows off, anything else off.
+// DefaultModeFor returns the platform default: darwin pause, linux alert,
+// windows off, anything else off. macOS is pause-only: kill needs every
+// group member's environment to confirm its Claude Code parent, and macOS
+// hides the environment of system binaries (/bin/zsh, /bin/bash) that
+// lead every tool-call job, so kill could never fire there.
 func DefaultModeFor(goos string) Mode {
 	switch goos {
 	case "darwin":
-		return ModePauseKill
+		return ModePause
 	case "linux":
 		return ModeAlert
 	}

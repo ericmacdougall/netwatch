@@ -7,7 +7,7 @@ netwatch is a small background monitor for developer machines. It answers two qu
 
 3. **What is eating memory, and which agent started it?** Every 10 seconds (every 2 seconds while memory is tight) it records memory pressure, the compressor, swap and the largest processes, with the app and, for Claude Code tool calls, the agent that launched them. It warns early: a process over 8 GB, growth over 2 GB a minute, memory pressure, swap over 10 GB, or more than 60 Chrome helpers. After a crash, `netwatch incident` joins macOS jetsam and reset reports with those samples.
 
-The orphan scanner never kills anything on its own. `netwatch orphans --kill` is opt-in, re-checks every process just before signalling it, and on macOS and Linux only sends `SIGTERM`. The one exception is the [memory guard](#memory-guard): on macOS, when the host itself is about to run out of memory, it pauses the Claude Code tool-call job that is causing it, and kills that job only as a last resort. Turn it down to alerts with `netwatch guard alert`.
+The orphan scanner never kills anything on its own. `netwatch orphans --kill` is opt-in, re-checks every process just before signalling it, and on macOS and Linux only sends `SIGTERM`. The one exception is the [memory guard](#memory-guard): on macOS, when the host itself is about to run out of memory, it pauses the Claude Code tool-call job that is causing it. On macOS it never kills (see [Modes](#memory-guard)). Turn it down to alerts with `netwatch guard alert`.
 
 It runs on macOS, Linux and Windows as a single static binary with one dependency, [`golang.org/x/sys`](https://pkg.go.dev/golang.org/x/sys) (BSD-3-Clause, from the Go project). On a laptop it averages about 1% of one CPU core, including the helper commands it runs, and about 13 MB of memory; see [Resource use](#resource-use).
 
@@ -191,11 +191,11 @@ The guard protects the host, not individual jobs. It has no per-job size or grow
 
 1. **Alert.** A `RESOURCE_ALERT` or `HOST_AT_RISK_UNPROTECTED` event and a notification name the process, its app and the agent that launched it.
 2. **Pause.** The agent job that is causing the danger is stopped with `SIGSTOP`. A paused job keeps all its memory and work. It is resumed with `SIGCONT` once memory pressure has been normal for 30 seconds, after at most 30 minutes if pressure is no longer critical, or after 2 hours regardless. Resume it yourself with `netwatch resume PGID` or `netwatch resume --all`. A group you resume by hand is not paused or killed again during the same danger episode; alerts continue. A resume during the kill stage cancels the kill for that group. While the daemon runs, `resume` continues the group at once and the daemon updates its records on its next poll.
-3. **Kill**, only as a last resort, only in `pause+kill` mode, and only when the paused job is the proven cause: critical pressure for a full minute after the pause, or the memory compressor at 95% or more. The job gets `SIGTERM`, then `SIGKILL` 5 seconds later.
+3. **Kill** (Linux only; never on macOS, see below), only as a last resort, only in `pause+kill` mode, and only when the paused job is the proven cause: critical pressure for a full minute after the pause, or the memory compressor at 95% or more. The job gets `SIGTERM`, then `SIGKILL` 5 seconds later.
 
 **Danger** means one of: critical memory pressure; the compressor at 85% of its limit or more; swap at 85% of swap plus free disk; one agent group at 75% of RAM and growing over 1 GB a minute; or a group whose growth would use the remaining memory within 15 seconds, confirmed by one of the other signals.
 
-**Modes.** `netwatch guard off|alert|pause|pause+kill` takes effect within one poll, logs `MODE_CHANGE` with who changed it, and sends a notification. Switching to `off` or `alert` resumes everything the guard paused. The defaults are `pause+kill` on macOS, `alert` on Linux and `off` on Windows. `netwatch guard status` prints the mode and thresholds. To turn the guard down to alerts only:
+**Modes.** `netwatch guard off|alert|pause|pause+kill` takes effect within one poll, logs `MODE_CHANGE` with who changed it, and sends a notification. Switching to `off` or `alert` resumes everything the guard paused. The defaults are `pause` on macOS, `alert` on Linux and `off` on Windows. **macOS is pause-only.** Kill requires every process in the job to show `CLAUDECODE=1` in its own environment, and macOS does not let other processes read the environment of system binaries such as `/bin/zsh`, which runs every Bash tool call. So kill can never fire there, even in `pause+kill` mode, and `netwatch guard status` says "kill unavailable on macOS: environment of system binaries not readable". The check is not relaxed: a paused job keeps its memory and work, so pausing is the safer action anyway. `netwatch guard status` prints the mode and thresholds. To turn the guard down to alerts only:
 
 ```sh
 netwatch guard alert
@@ -211,7 +211,7 @@ netwatch guard alert
 
 **Wall-clock timer warning.** Pausing a job does not pause the clock of whatever is waiting for it. A foreground Bash tool call has its own timeout, so Claude Code may kill a paused job when that timeout expires, and the agent may retry the same command. Guard events are also written to `guard-events.jsonl` in netwatch's state directory, without command text, so harness hooks can warn the agent.
 
-**Limits.** The guard polls; it cannot outrun an allocation of several GB per second. On 2026-11-04 a Python process grew to 65 GB in about 11 seconds on a 16 GB Mac. Replayed against that incident, the guard would have paused it within about 2 seconds of the first danger signal and killed it within a minute, well before the host reset 27 minutes later, but after macOS had already started killing other apps. So the guard prevents the host reset; it does not prevent the first jetsam kills on very fast allocations. Validating input (never point a reader at an endless stream) is the first line of defence.
+**Limits.** The guard polls; it cannot outrun an allocation of several GB per second. On 2026-11-04 a Python process grew to 65 GB in about 11 seconds on a 16 GB Mac. Replayed against that incident, the guard would have paused it within about 2 seconds of the first danger signal, well before the host reset 27 minutes later, but after macOS had already started killing other apps. A paused job stops growing, so the guard prevents the host reset; it does not prevent the first jetsam kills on very fast allocations. Validating input (never point a reader at an endless stream) is the first line of defence.
 
 **Rollback.** To turn the guard off and return to the previous version:
 
@@ -246,6 +246,7 @@ netwatch guard alert      # stop pausing and killing
 - An installed browser's `chrome_crashpad_handler` always detaches to `launchd`, so it is ignored by default. Handlers from Playwright or Puppeteer browser caches are still reported.
 - Processes are read with `ps`. `ps` CPU is a decaying average, not an exact per-interval figure.
 - Only IPv4 default routes are used to find the gateway.
+- The memory guard pauses but never kills: the environment of system binaries such as `/bin/zsh` is not readable by other processes, and kill requires it. The session id of a tool-call job is read from a member that is not a system binary, such as `python3`; a job made only of system binaries has no session or agent label.
 
 ### Linux
 

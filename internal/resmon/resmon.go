@@ -47,6 +47,8 @@ type Classification struct {
 	// Annotate fills the attribution fields of sample rows (owner app,
 	// agent root, session, agent label). Nil leaves them empty.
 	Annotate func(rows []sampler.Row)
+	// Who names a process's owner app and agent for alerts. Nil: unnamed.
+	Who func(p resources.Proc) (app, agent string)
 }
 
 // Classifier turns a full scan into guard groups. It is the only place
@@ -227,7 +229,7 @@ func (l *Loop) Tick() (hot bool) {
 	l.mu.Lock()
 	snap := guard.Snapshot{At: now, Sys: sys, Signals: sig, Terms: terms,
 		ScanAt: l.scanAt, ScanOK: l.scanOK, SelfTest: l.selfErr, Alive: l.view.Alive}
-	procs := l.procs
+	procs, who := l.procs, l.cls.Who
 	l.mu.Unlock()
 
 	// A missing state file just means nothing has been paused yet.
@@ -236,7 +238,7 @@ func (l *Loop) Tick() (hot bool) {
 	}
 	l.d.Exec.Apply(l.d.Machine.Step(snap))
 
-	l.d.Alerts.Run(alerts.Input{At: now, Sys: sys, Procs: procs, Series: alertSeries(terms)})
+	l.d.Alerts.Run(alerts.Input{At: now, Sys: sys, Procs: procs, Series: alertSeries(terms), Who: who})
 
 	if !now.Before(l.nextSamp) {
 		l.sample(now, sys, procs)
@@ -427,7 +429,12 @@ func alertSeries(terms []guard.Term) []alerts.Series {
 		for i, p := range t.Series {
 			pts[i] = alerts.Point{At: p.At, Bytes: p.Bytes}
 		}
-		out = append(out, alerts.Series{Key: t.Key, Points: pts})
+		s := alerts.Series{Key: t.Key, Points: pts}
+		if g := t.Group; g != nil {
+			// Every guard group is a Claude Code tool-call job.
+			s.Name, s.App, s.Agent = g.Cmd, ClaudeOwner, g.Agent
+		}
+		out = append(out, s)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
 	return out

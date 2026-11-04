@@ -67,7 +67,7 @@ func ptr[T any](v T) *T { return &v }
 func TestEffectiveModeGOOSDefaultsAndPrecedence(t *testing.T) {
 	cfg := config.Default()
 	dir := filepath.Join(t.TempDir(), "state")
-	for goos, want := range map[string]guard.Mode{"darwin": guard.ModePauseKill, "linux": guard.ModeAlert, "windows": guard.ModeOff, "plan9": guard.ModeOff} {
+	for goos, want := range map[string]guard.Mode{"darwin": guard.ModePause, "linux": guard.ModeAlert, "windows": guard.ModeOff, "plan9": guard.ModeOff} {
 		m, src := effectiveMode(&cfg, dir, goos)
 		if m != want || src != srcDefault {
 			t.Errorf("%s: %s %s, want %s", goos, m, src, want)
@@ -374,7 +374,8 @@ func TestGuardStatusListsPausedGroupsAndKillAvailability(t *testing.T) {
 	if err := os.WriteFile(a.configPath, []byte(`{"guard_claude_versions":["2.1.318"]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.cmdGuard([]string{"status"}); err != nil {
+	// Per-version kill checks apply off macOS (see TestMacIsPauseOnlyAndStatusSaysWhy).
+	if err := a.guardStatus(a.loadConfigOpts(false), sd, "linux", runningClaudeVersions()); err != nil {
 		t.Fatal(err)
 	}
 	s := out.String()
@@ -446,5 +447,34 @@ func TestResumeLockErrorIsNotADaemon(t *testing.T) {
 	}
 	if req, _, err := resumeRequests(logDir); err == nil || req != nil {
 		t.Fatalf("want an error, got req=%v err=%v", req, err)
+	}
+}
+
+// Decision (a): macOS is pause-only by design. The default is pause, and
+// status says why kill is unavailable instead of listing per-version kill
+// checks that could never pass there.
+func TestMacIsPauseOnlyAndStatusSaysWhy(t *testing.T) {
+	if m := guard.DefaultModeFor("darwin"); m != guard.ModePause {
+		t.Fatalf("darwin default %s, want pause", m)
+	}
+	cfg := config.Default()
+	a, out, _ := newTestApp(t)
+	stateDir, _, _ := statePaths(a.logDir)
+	if err := a.guardStatus(&cfg, stateDir, "darwin", []string{"2.1.318"}); err != nil {
+		t.Fatal(err)
+	}
+	s := out.String()
+	if !strings.Contains(s, "mode=pause ") || !strings.Contains(s, "kill unavailable on macOS: environment of system binaries not readable") {
+		t.Fatalf("darwin status:\n%s", s)
+	}
+	if strings.Contains(s, "kill available") || strings.Contains(s, "verify-shape") {
+		t.Fatalf("darwin status offers kill checks:\n%s", s)
+	}
+	out.Reset()
+	if err := a.guardStatus(&cfg, stateDir, "linux", []string{"2.1.318"}); err != nil {
+		t.Fatal(err)
+	}
+	if s := out.String(); strings.Contains(s, "macOS") || !strings.Contains(s, "claude 2.1.318: kill") {
+		t.Fatalf("linux status:\n%s", s)
 	}
 }

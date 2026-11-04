@@ -339,13 +339,17 @@ func rateLimitedErrs(w interface{ Write([]byte) (int, error) }) func(string, err
 }
 
 // guardInstallNote is printed by install: the guard mode in effect and the
-// one-command opt-out (finding CR-10: kill is on by default on macOS).
+// one-command opt-out (finding CR-10).
 func guardInstallNote(cfg *config.Config, logDir, goos string) string {
 	stateDir, _, _ := statePaths(logDir)
 	mode, src := effectiveMode(cfg, stateDir, goos)
 	note := fmt.Sprintf("memory guard: mode %s (%s).", mode, src)
 	switch mode {
 	case guard.ModePauseKill:
+		if goos == "darwin" {
+			note += " When the host is about to run out of memory it pauses the Claude Code job causing it; it never kills (" + macKillNote + ")."
+			break
+		}
 		note += " When the host is about to run out of memory it pauses the Claude Code job causing it, and kills it only as a last resort."
 	case guard.ModePause:
 		note += " When the host is about to run out of memory it pauses the Claude Code job causing it; it never kills."
