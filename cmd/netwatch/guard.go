@@ -357,13 +357,8 @@ func (a *app) cmdResume(args []string) error {
 		fmt.Fprintf(a.stdout, "forced: leaving paused groups %v; stopped pids left behind: %v\n", rep.Live, rep.StoppedPIDs)
 		return nil
 	}
-	req, unlock, err := resumeRequests(a.logDir)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	rep, err := guard.ManualResumeLive(store, view, sig, time.Now(), pgid, *all, req)
-	if req != nil && err == nil && len(rep.Resumed) > 0 {
+	rep, viaDaemon, err := resumeLive(a.logDir, store, view, sig, pgid, *all)
+	if viaDaemon && err == nil && len(rep.Resumed) > 0 {
 		fmt.Fprintln(a.stdout, "a running netwatch holds these records; it drops them on its next poll and will not pause these groups again until the danger episode ends")
 	}
 	if len(rep.Pruned) > 0 {
@@ -418,12 +413,7 @@ func validateResumeArgs(all, check, force bool, rest []string) (int, error) {
 func resumeAllForUninstall(logDir string) error {
 	_, stateFile, _ := statePaths(logDir)
 	view, sig := resumeDeps()
-	req, unlock, err := resumeRequests(logDir)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	_, err = guard.ManualResumeLive(&guard.FileStore{Path: stateFile}, view, sig, time.Now(), 0, true, req)
+	_, _, err := resumeLive(logDir, &guard.FileStore{Path: stateFile}, view, sig, 0, true)
 	if errors.Is(err, guard.ErrMissing) {
 		return nil
 	}
@@ -448,19 +438,45 @@ var errLockHeld = errors.New("another netwatch is already running")
 
 // resumeRequests decides how a manual resume reaches the guard state.
 // With the run lock free no daemon runs: the CLI holds the lock (so none
-// can start meanwhile), clears requests a stopped daemon never took, and
-// updates the state file itself. With the lock held, the daemon owns the
-// file and the CLI files a request per group for it (code-inspection F1:
-// two writers lost each other's records). Any other lock error fails.
-func resumeRequests(logDir string) (guard.ResumeRequests, func(), error) {
+// can start meanwhile), takes the requests a stopped daemon never took
+// (pending, to apply before anything else) and drops leftover temp files,
+// then updates the state file itself. With the lock held, the daemon owns
+// the file and the CLI files a request per group for it (code-inspection
+// F1: two writers lost each other's records). Any other lock error fails.
+func resumeRequests(logDir string) (req guard.ResumeRequests, pending []string, unlock func(), err error) {
 	stateDir, _, _ := statePaths(logDir)
-	unlock, err := lockRun(filepath.Join(logDir, "run.lock"))
+	unlock, err = lockRun(filepath.Join(logDir, "run.lock"))
 	switch {
 	case err == nil:
-		_ = guard.DirRequests{Dir: stateDir}.Clear()
-		return nil, unlock, nil
+		dr := guard.DirRequests{Dir: stateDir}
+		pending, _ = dr.Take()
+		_ = dr.Clear() // temp files of a crashed writer
+		return nil, pending, unlock, nil
 	case errors.Is(err, errLockHeld):
-		return guard.DirRequests{Dir: stateDir}, func() {}, nil
+		return guard.DirRequests{Dir: stateDir}, nil, func() {}, nil
 	}
-	return nil, nil, fmt.Errorf("resume: cannot check for a running daemon: %w", err)
+	return nil, nil, nil, fmt.Errorf("resume: cannot check for a running daemon: %w", err)
+}
+
+// resumeLive runs the resume on whichever path resumeRequests chose. If
+// the no-daemon path fails to save, the pending requests are filed again
+// so they are not lost.
+func resumeLive(logDir string, store guard.Store, view guard.ProcView, sig guard.Signaller, pgid int, all bool) (guard.ResumeReport, bool, error) {
+	req, pending, unlock, err := resumeRequests(logDir)
+	if err != nil {
+		return guard.ResumeReport{}, false, err
+	}
+	defer unlock()
+	if req != nil {
+		rep, err := guard.ManualResumeLive(store, view, sig, time.Now(), pgid, all, req)
+		return rep, true, err
+	}
+	rep, err := guard.ManualResumeApplying(store, view, sig, time.Now(), pgid, all, pending)
+	if err != nil && !errors.Is(err, guard.ErrNotRecorded) && len(pending) > 0 {
+		stateDir, _, _ := statePaths(logDir)
+		for _, k := range pending {
+			_ = guard.DirRequests{Dir: stateDir}.Add(k)
+		}
+	}
+	return rep, false, err
 }

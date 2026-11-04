@@ -140,6 +140,7 @@ type Labeler struct {
 }
 
 var sessionID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,63}$`)
+var agentID = regexp.MustCompile(`^[A-Za-z0-9]{1,64}$`)
 var agentFile = regexp.MustCompile(`^(main|agent-[A-Za-z0-9]{1,64})\.jsonl$`)
 
 type walEntry struct {
@@ -209,6 +210,9 @@ func (l *Labeler) Label(session string, shellStart time.Time) Label {
 			}
 			who := "main"
 			if e.AgentID != nil && *e.AgentID != "" {
+				if !agentID.MatchString(*e.AgentID) {
+					continue // not an id: never copied into records or alerts
+				}
 				who = "agent:" + *e.AgentID
 			}
 			cands = append(cands, cand{who, gap.Abs()})
