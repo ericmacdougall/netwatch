@@ -243,3 +243,25 @@ func TestDirReaderBounds(t *testing.T) {
 		t.Fatal("absolute path accepted")
 	}
 }
+
+// A busy session has hundreds of agent WAL files (598 in the live run that
+// found this). The labeler must read the recently written ones, not the
+// first 64 in directory order.
+func TestLabelFindsRecentAgentAmongManyFiles(t *testing.T) {
+	root := t.TempDir()
+	base := time.Date(2026, 11, 4, 17, 0, 0, 0, time.UTC)
+	old := base.Add(-24 * time.Hour)
+	for i := 0; i < 300; i++ {
+		name := fmt.Sprintf("agent-a%03d.jsonl", i)
+		writeWAL(t, root, "busy", name, walLine(old, fmt.Sprintf("a%03d", i)))
+		if err := os.Chtimes(filepath.Join(root, "busy", name), old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Sorts last by name, so directory order alone puts it past 64.
+	writeWAL(t, root, "busy", "agent-zzz.jsonl", walLine(base, "zzz"))
+	l := &Labeler{FS: DirReader{Root: root}}
+	if got := l.Label("busy", base.Add(300*time.Millisecond)); got.Agent != "agent:zzz" {
+		t.Fatalf("recent agent file not read: %+v", got)
+	}
+}

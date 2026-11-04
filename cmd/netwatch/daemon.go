@@ -227,7 +227,7 @@ func (a *app) startResources(ctx context.Context, d resourceDeps) (<-chan error,
 
 	elig := &resmon.Elig{R: r, SelfPID: os.Getpid(), UID: os.Getuid(),
 		NeverSignal: d.cfg.GuardNeverSignal, Versions: d.cfg.GuardClaudeVersions,
-		AllowlistDir: allowDir, Labeler: labeler}
+		AllowlistDir: allowDir, Labeler: labeler, Home: home}
 	if tt != nil {
 		elig.TestJobPGID = tt.PGID
 	}
