@@ -1,3 +1,5 @@
+//go:build !windows
+
 package resmon
 
 import (
@@ -29,10 +31,20 @@ func TestSpawnedOnlyRefusesEverythingOutsideTheJob(t *testing.T) {
 			t.Fatalf("member %d refused: %v", pid, err)
 		}
 	}
-	for _, pid := range []int{200, 1, 0, 999} {
+	for _, pid := range []int{200, 1, 0} {
 		if err := s.Signal(pid, time.Time{}, syscall.SIGSTOP); !errors.Is(err, ErrNotTarget) {
 			t.Errorf("pid %d: err %v, want ErrNotTarget", pid, err)
 		}
+	}
+	// A vanished pid reads as gone, like the real signaller reports it.
+	if err := s.Signal(999, time.Time{}, syscall.SIGSTOP); !errors.Is(err, guard.ErrStartMismatch) {
+		t.Errorf("gone pid: err %v, want ErrStartMismatch", err)
+	}
+	// A process in the group that predates the job is not ours.
+	f.add(102, 1, 100, gib, 0)
+	f.procs[102].Start = f.procs[100].Start.Add(-time.Hour)
+	if err := s.Signal(102, f.procs[102].Start, syscall.SIGCONT); !errors.Is(err, ErrNotTarget) {
+		t.Errorf("older process in the group: err %v, want ErrNotTarget", err)
 	}
 	// Leader pid reused: same pgid, different start time.
 	f.procs[100].Start = f.procs[100].Start.Add(time.Hour)
@@ -60,5 +72,27 @@ func TestSpawnedOnlyHoldsWithoutDemotion(t *testing.T) {
 		if s.pid != 100 {
 			t.Fatalf("signal reached pid %d outside the spawned job: %v", s.pid, h.sigs)
 		}
+	}
+}
+
+// When the leader has exited, a stopped member can still be resumed
+// (SIGCONT) but never stopped or killed: the group is no longer provable.
+func TestSpawnedOnlyLeaderGoneAllowsOnlyCont(t *testing.T) {
+	f := newFake()
+	f.add(100, 1, 100, gib, 0)
+	f.add(101, 100, 100, gib, 0)
+	in := &countSig{}
+	s := SpawnedOnly{Inner: in, R: f, Target: TestTarget{PGID: 100, Start: f.procs[100].Start}}
+	delete(f.procs, 100)
+	for _, sig := range []syscall.Signal{syscall.SIGSTOP, syscall.SIGTERM, syscall.SIGKILL} {
+		if err := s.Signal(101, f.procs[101].Start, sig); !errors.Is(err, ErrNotTarget) {
+			t.Errorf("%v with leader gone: err %v, want ErrNotTarget", sig, err)
+		}
+	}
+	if err := s.Signal(101, f.procs[101].Start, syscall.SIGCONT); err != nil {
+		t.Fatalf("SIGCONT with leader gone refused: %v", err)
+	}
+	if in.n != 1 {
+		t.Fatalf("inner called %d times, want 1 (the SIGCONT)", in.n)
 	}
 }
