@@ -156,6 +156,7 @@ func TestGuardRejectsBadArguments(t *testing.T) {
 // ProcView and the Signaller, so no real process is ever touched.
 type fakeProcs struct {
 	alive   map[int]time.Time
+	stopped []guard.ProcInfo
 	signals []struct {
 		pid int
 		sig syscall.Signal
@@ -163,7 +164,7 @@ type fakeProcs struct {
 }
 
 func (f *fakeProcs) Group(int) ([]guard.ProcInfo, error) { return nil, nil }
-func (f *fakeProcs) Stopped() ([]guard.ProcInfo, error)  { return nil, nil }
+func (f *fakeProcs) Stopped() ([]guard.ProcInfo, error)  { return f.stopped, nil }
 func (f *fakeProcs) Alive(pid int, st time.Time) bool {
 	s, ok := f.alive[pid]
 	return ok && s.Equal(st)
@@ -528,5 +529,46 @@ func TestResumeAfterDaemonCrashAppliesPendingRequest(t *testing.T) {
 	}
 	if ents, _ := os.ReadDir(stateDir); len(ents) != 1 { // only the state file
 		t.Fatalf("request files left: %v", ents)
+	}
+}
+
+// Red-team F1: with the state unusable, resume --all refuses, and
+// resume --pid continues one stopped process of the caller's own uid.
+func TestResumePIDOnUnusableState(t *testing.T) {
+	a, out, _ := newTestApp(t)
+	me := os.Getuid()
+	f := &fakeProcs{alive: map[int]time.Time{100: tt0, 300: tt0},
+		stopped: []guard.ProcInfo{{PID: 100, PGID: 100, UID: me, Start: tt0, Stopped: true}, {PID: 300, PGID: 300, UID: me + 1, Start: tt0, Stopped: true}}}
+	withFake(t, f)
+	sd, sf, _ := statePaths(a.logDir)
+	os.MkdirAll(sd, 0o700)
+	os.WriteFile(sf, []byte("{garbage"), 0o600)
+	if err := a.cmdResume([]string{"--all"}); !errors.Is(err, guard.ErrCorrupt) {
+		t.Fatalf("setup: --all must refuse: %v", err)
+	}
+	out.Reset()
+	if err := a.cmdResume([]string{"--all", "--check", "--force"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "[100]") || !strings.Contains(out.String(), "resume --pid") {
+		t.Fatalf("--check --force must list own stopped pids and the way out: %q", out.String())
+	}
+	var ue usageError
+	for _, bad := range [][]string{{"--pid", "100", "--all"}, {"--pid", "100", "7"}, {"--pid", "1"}} {
+		if err := a.cmdResume(bad); !errors.As(err, &ue) {
+			t.Errorf("%v: want a usage error, got %v", bad, err)
+		}
+	}
+	if err := a.cmdResume([]string{"--pid", "300"}); !errors.Is(err, guard.ErrNotOwn) {
+		t.Fatalf("another uid: %v", err)
+	}
+	if len(f.signals) != 0 {
+		t.Fatalf("nothing signalled yet: %v", f.signals)
+	}
+	if err := a.cmdResume([]string{"--pid", "100"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.signals) != 1 || f.signals[0].pid != 100 || f.signals[0].sig != syscall.SIGCONT {
+		t.Fatalf("exactly one SIGCONT to 100: %v", f.signals)
 	}
 }

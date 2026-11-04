@@ -344,15 +344,26 @@ func (e *Executor) Recover() RecoverReport {
 		if e.View != nil {
 			rep.Stopped, _ = e.View.Stopped()
 		}
-		if errors.Is(err, ErrMissing) && len(rep.Stopped) == 0 {
-			rep.FailedOK = false // first run: nothing to adopt, nothing stopped
+		if errors.Is(err, ErrMissing) {
+			// First run, or nothing was ever paused. Processes stopped by
+			// someone else (a shell's Ctrl-Z, a debugger) are usually not
+			// ours, so there is no alert or notification, only a log line
+			// in case the file was removed while a job was held.
+			if len(rep.Stopped) == 0 {
+				rep.FailedOK = false
+				return rep
+			}
+			e.events().Event("GUARD_STATE_MISSING", map[string]any{"stopped": len(rep.Stopped),
+				"note": "no guard state; nothing adopted. If netwatch paused a job, resume it with: netwatch resume --pid PID (list: netwatch resume --all --check --force)"})
 			return rep
 		}
 		var pids []int
 		for _, p := range rep.Stopped {
 			pids = append(pids, p.PID)
 		}
-		msg := fmt.Sprintf("LOUD: guard state unusable (%v); nothing adopted. Stopped pids found: %v. Resume with: netwatch resume --all", err, pids)
+		msg := fmt.Sprintf("LOUD: guard state unusable (%v); nothing adopted, so netwatch resume --all cannot help. "+
+			"Stopped pids found (some may have been stopped by you, not netwatch): %v. "+
+			"Resume a job netwatch stopped with: netwatch resume --pid PID", err, pids)
 		e.events().Event(record.ResourceAlert, map[string]any{"reason": msg, "stopped_pids": pids})
 		e.notify("guard-state-lost", "Memory guard state lost", msg)
 		return rep

@@ -15,7 +15,52 @@ var (
 	// ErrPausedRemain: the rollback gate refuses while live paused groups
 	// remain.
 	ErrPausedRemain = errors.New("guard: live paused groups remain; run netwatch guard alert and netwatch resume --all first")
+	// ErrNotStopped: resume --pid found no stopped process with that pid.
+	ErrNotStopped = errors.New("guard: no stopped process with that pid")
+	// ErrNotOwn: resume --pid only continues the caller's own processes.
+	ErrNotOwn = errors.New("guard: that process belongs to another user")
+	// ErrInRecord: the pid is a member of a group netwatch recorded; resume
+	// the group instead so the record is released with it.
+	ErrInRecord = errors.New("guard: that pid is in a paused group netwatch recorded")
 )
+
+// ResumePID continues one stopped process of the caller's own uid. It is
+// the recovery path when the state file is unusable and a job netwatch
+// stopped would otherwise stay frozen. It refuses a pid that is not
+// stopped, belongs to another uid, or is a member of a usable record (use
+// ManualResume for that group). The signaller re-reads the start time
+// immediately before SIGCONT.
+func ResumePID(store Store, view ProcView, sig Signaller, pid, uid int) error {
+	if pid <= 1 {
+		return fmt.Errorf("%w: %d", ErrRefused, pid)
+	}
+	stopped, err := view.Stopped()
+	if err != nil {
+		return err
+	}
+	var p *ProcInfo
+	for i := range stopped {
+		if stopped[i].PID == pid {
+			p = &stopped[i]
+		}
+	}
+	if p == nil {
+		return fmt.Errorf("%w: %d", ErrNotStopped, pid)
+	}
+	if p.UID != uid {
+		return fmt.Errorf("%w: %d", ErrNotOwn, pid)
+	}
+	if st, err := store.Load(); err == nil {
+		for _, r := range st.Groups {
+			for _, m := range r.Members {
+				if m.PID == pid {
+					return fmt.Errorf("%w: pid %d, group %d; run netwatch resume %d", ErrInRecord, pid, r.PGID, r.PGID)
+				}
+			}
+		}
+	}
+	return sig.Signal(pid, p.Start, sigCONT)
+}
 
 // ResumeReport says what a manual resume did.
 type ResumeReport struct {
@@ -172,6 +217,9 @@ type RollbackReport struct {
 	Live        []int // pgids of live, matching paused groups
 	StoppedPIDs []int // with force: the pids the swap leaves stopped
 	Forced      bool
+	// Unusable is set (with force) when the state could not be read; then
+	// StoppedPIDs lists every stopped process of uid that was found.
+	Unusable error
 }
 
 // RollbackGate is the check the harness rollback runs before swapping the
@@ -179,7 +227,7 @@ type RollbackReport struct {
 // matching paused group remains. With force it proceeds and lists every
 // stopped pid it leaves behind. A missing file means nothing is paused; a
 // corrupt or unsafe file refuses unless forced.
-func RollbackGate(store Store, view ProcView, force bool) (RollbackReport, error) {
+func RollbackGate(store Store, view ProcView, uid int, force bool) (RollbackReport, error) {
 	var rep RollbackReport
 	st, err := store.Load()
 	if err != nil {
@@ -188,6 +236,15 @@ func RollbackGate(store Store, view ProcView, force bool) (RollbackReport, error
 		}
 		if force {
 			rep.Forced = true
+			rep.Unusable = err
+			if ps, verr := view.Stopped(); verr == nil {
+				for _, p := range ps {
+					if p.UID == uid {
+						rep.StoppedPIDs = append(rep.StoppedPIDs, p.PID)
+					}
+				}
+			}
+			sort.Ints(rep.StoppedPIDs)
 			return rep, nil
 		}
 		return rep, fmt.Errorf("rollback refused, state unusable: %w", err)

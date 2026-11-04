@@ -61,6 +61,7 @@ Commands:
   guard off|alert|pause|pause+kill|status|verify-shape
                            set or show the memory guard mode (see README)
   resume PGID|--all        resume jobs the memory guard paused
+  resume --pid PID         resume one stopped process of yours (guard state unusable)
   install [--label NAME]   register the per-user background service
   uninstall [--label NAME] remove it
   status [--label NAME]    show service and log status

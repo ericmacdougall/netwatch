@@ -1,9 +1,8 @@
 // Package guard is the host-protection state machine: on host danger it
 // alerts, pauses (SIGSTOP) the agent-owned process group that caused it,
 // resumes when danger clears and, only in pause+kill mode and only under
-// the kill gate, kills it. The rules are in the spec for GoodQA
-// work-tracker-automatic#35742 (v11) and the plan amendments A1-A8; every
-// rule has a named test.
+// the kill gate, kills it. The rules follow the guard spec and its plan
+// amendments A1-A8; every rule has a named test.
 //
 // The machine is pure: it takes a Snapshot and the time and returns
 // Actions. An Executor applies actions through a Signaller, and a Store

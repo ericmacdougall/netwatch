@@ -3,8 +3,8 @@
 // watcher's child records and per-candidate environment reads. Everything
 // it does not positively identify is ineligible (alert only).
 //
-// Rules are spec v11 (GoodQA work-tracker-automatic#35742), Scope
-// "Eligibility" and "Exclusions", and AC-2.
+// The rules follow the guard spec's "Eligibility" and "Exclusions"
+// sections and AC-2.
 package eligibility
 
 import (

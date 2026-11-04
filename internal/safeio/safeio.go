@@ -3,7 +3,7 @@
 // .ips reports, hook WALs, transcripts, settings, config, guard state,
 // mode and allowlist files. It never follows symlinks, never blocks on a
 // FIFO or device, caps every read and rejects pathological JSON. The
-// conformance corpus mirrors harness safe_input (#49) by copy.
+// conformance corpus mirrors the harness safe_input corpus by copy.
 package safeio
 
 import (
