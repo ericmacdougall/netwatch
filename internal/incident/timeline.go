@@ -10,6 +10,7 @@ import (
 
 	"github.com/ericmacdougall/netwatch/internal/jetsam"
 	"github.com/ericmacdougall/netwatch/internal/resources"
+	"github.com/ericmacdougall/netwatch/internal/transcript"
 )
 
 // Attribution is the agent label for the culprit taken from the samples
@@ -87,6 +88,9 @@ type Report struct {
 	Skipped   []jetsam.Skip    `json:"skipped,omitempty"`
 	Notes     []string         `json:"notes,omitempty"`
 	Reports   []*jetsam.Report `json:"-"`
+	// Candidates are the transcript Bash calls that may have started the
+	// culprit, best first (see candidates.go for the rule).
+	Candidates []Candidate `json:"candidates,omitempty"`
 }
 
 // Options says where to look.
@@ -94,9 +98,12 @@ type Options struct {
 	LogDir    string // holds events.jsonl and resources.jsonl
 	JetsamDir string
 	DiagDirs  []string
-	Since     time.Time // zero: everything the bounds allow
-	Last      bool      // only the most recent cluster of reports
-	Now       time.Time
+	// TranscriptRoot is the projects root to rank candidates from; empty
+	// means no transcript attribution.
+	TranscriptRoot string
+	Since          time.Time // zero: everything the bounds allow
+	Last           bool      // only the most recent cluster of reports
+	Now            time.Time
 }
 
 // clusterGap separates two incidents: reports closer than this belong to
@@ -138,12 +145,16 @@ func Collect(o Options) (*Report, error) {
 		}
 		rep.Entries = append(rep.Entries, eventEntries(filepath.Join(o.LogDir, "events.jsonl"), from, to)...)
 	}
-	rep.Resets = ScanDiags(o.DiagDirs, from, to.Add(2*time.Hour))
 	rep.Estimate = BuildEstimate(reports, samples)
+	rep.rankTranscripts(o)
+	rep.Resets = ScanDiags(o.DiagDirs, from, to.Add(2*time.Hour))
 	rep.Entries = append(rep.Entries, reportEntries(reports)...)
 	rep.Entries = append(rep.Entries, sampleEntries(samples)...)
 	for _, d := range rep.Resets {
 		rep.Entries = append(rep.Entries, Entry{d.At, "diag", fmt.Sprintf("%s report %s", d.Kind, filepath.Base(d.Path))})
+	}
+	for _, c := range rep.Candidates[:min(len(rep.Candidates), 1)] {
+		rep.Entries = append(rep.Entries, Entry{c.At, "transcript", "candidate Bash call (" + c.Confidence + "): " + c.Label()})
 	}
 	if rep.Estimate != nil {
 		rep.Entries = append(rep.Entries, Entry{rep.Estimate.Start, "estimate",
@@ -238,6 +249,10 @@ func (r *Report) Render(w io.Writer) {
 			fmt.Fprintf(w, "Attribution: unknown\n")
 		}
 	}
+	for _, c := range r.Candidates {
+		fmt.Fprintf(w, "Candidate %d (%s): %s at %s, %s before the start, %s\n    %s\n", c.Rank, c.Confidence, c.Label(),
+			c.At.UTC().Format("15:04:05.0Z"), c.Before.Round(100*time.Millisecond), "sha256 "+c.SHA256[:12], c.Command)
+	}
 	for _, s := range r.Skipped {
 		fmt.Fprintf(w, "skipped %s: %s\n", filepath.Base(s.Path), s.Err)
 	}
@@ -316,3 +331,23 @@ func ts0(t time.Time) string {
 
 // JSON encodes the replay report.
 func (r *ReplayReport) JSON() ([]byte, error) { return json.MarshalIndent(r, "", "  ") }
+
+// rankTranscripts adds the transcript candidates for the estimated start.
+func (r *Report) rankTranscripts(o Options) {
+	if r.Estimate == nil {
+		return
+	}
+	if o.TranscriptRoot == "" {
+		r.Notes = append(r.Notes, "no transcript root given: no transcript attribution")
+		return
+	}
+	calls, st, err := transcript.Scan(transcript.Config{Root: o.TranscriptRoot, WindowStart: r.Estimate.Start.Add(-CandidateBefore)})
+	if err != nil {
+		r.Notes = append(r.Notes, "transcripts unreadable: "+err.Error())
+		return
+	}
+	r.Candidates = RankCandidates(calls, r.Estimate.Start)
+	if len(r.Candidates) == 0 {
+		r.Notes = append(r.Notes, fmt.Sprintf("no Bash tool call within [-60s, +2s] of the start (%d transcript files read): attribution unknown", st.FilesRead))
+	}
+}
