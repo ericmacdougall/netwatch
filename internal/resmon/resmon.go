@@ -18,7 +18,7 @@ package resmon
 import (
 	"context"
 	"errors"
-	"io"
+	"fmt"
 	"io/fs"
 	"sort"
 	"sync"
@@ -75,12 +75,13 @@ type Deps struct {
 	Exec       *guard.Executor
 	Alerts     *alerts.Engine
 	Sampler    *sampler.Sampler
-	Resources  io.Writer // resources.jsonl, one JSON line per sample
+	Resources  Appender // resources.jsonl (rotating), one record per sample
 	Events     guard.EventSink
 	Budget     budget.Config
-	Watcher    Watcher    // optional
-	Mode       ModeSource // optional
-	JetsamDir  string     // optional; "" disables D5
+	Watcher    Watcher        // optional
+	Mode       ModeSource     // optional
+	Notify     guard.Notifier // optional; a mode change notifies
+	JetsamDir  string         // optional; "" disables D5
 	Now        func() time.Time
 	Errs       func(what string, err error) // optional, rate-limited by the caller
 
@@ -200,6 +201,12 @@ func (l *Loop) Tick() (hot bool) {
 			old := l.d.Machine.Mode()
 			l.d.Machine.SetMode(m)
 			l.d.Events.Event("MODE_CHANGE", map[string]any{"from": string(old), "to": string(m)})
+			if l.d.Notify != nil {
+				// Spec: every change is visible to the user, including one an
+				// agent made.
+				l.d.Notify.Notify("mode-change", "netwatch memory guard",
+					fmt.Sprintf("Guard mode changed from %s to %s. Set it with: netwatch guard MODE", old, m))
+			}
 		}
 	}
 	if !now.Before(l.nextScan) {
@@ -363,12 +370,7 @@ func (l *Loop) sample(now time.Time, sys resources.System, procs []resources.Pro
 	}
 	label(rec.TopMem)
 	label(rec.TopCPU)
-	b, err := rec.Line()
-	if err != nil {
-		l.d.Errs("sample", err)
-		return
-	}
-	if _, err := l.d.Resources.Write(append(b, '\n')); err != nil {
+	if err := l.d.Resources.Append(rec); err != nil {
 		l.d.Errs("sample write", err)
 	}
 }

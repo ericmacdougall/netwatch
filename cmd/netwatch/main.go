@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -27,6 +28,8 @@ import (
 	"github.com/ericmacdougall/netwatch/internal/record"
 	"github.com/ericmacdougall/netwatch/internal/redact"
 	"github.com/ericmacdougall/netwatch/internal/report"
+	"github.com/ericmacdougall/netwatch/internal/resmon"
+	"github.com/ericmacdougall/netwatch/internal/resources"
 )
 
 // version is set at build time with -ldflags "-X main.version=v1.2.3".
@@ -38,7 +41,7 @@ Usage:
   netwatch [--config FILE] [--log-dir DIR] <command> [flags]
 
 Commands:
-  run                      sample forever (what the background service runs)
+  run [--test-daemon]      sample forever (what the background service runs)
   once                     take one sample and one process scan, then exit
   report [--since 2h] [--json]
                            summarise the logs for a window (s, m, h or d)
@@ -50,9 +53,12 @@ Commands:
                            print recent events and follow new ones
   top [--mem|--cpu] [-n N] [--json]
                            largest processes by memory footprint or CPU
-  incident [--last] [--json] [--since D] [--dir DIR] [--replay-guard]
+  incident [--last] [--json] [--since D] [--dir DIR] [--transcripts DIR] [--replay-guard]
                            join jetsam and reset reports with netwatch's
                            samples, events and candidate tool calls
+  guard off|alert|pause|pause+kill|status|verify-shape
+                           set or show the memory guard mode (see README)
+  resume PGID|--all        resume jobs the memory guard paused
   install [--label NAME]   register the per-user background service
   uninstall [--label NAME] remove it
   status [--label NAME]    show service and log status
@@ -132,6 +138,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = a.cmdTop(args)
 	case "incident":
 		err = a.cmdIncident(args)
+	case "guard":
+		err = a.cmdGuard(args)
+	case "resume":
+		err = a.cmdResume(args)
 	case "install", "uninstall", "status":
 		err = a.cmdService(cmd, args)
 	case "config":
@@ -213,10 +223,28 @@ func (a *app) cmdRun(args []string, once bool) error {
 	if once {
 		name = "once"
 	}
-	if err := parse(a.flags(name), args); err != nil {
+	fs := a.flags(name)
+	testDaemon := false
+	if !once {
+		fs.BoolVar(&testDaemon, "test-daemon", false, "foreground test mode: guard only guard_test_target (never used by the service)")
+	}
+	if err := parse(fs, args); err != nil {
 		return err
 	}
-	cfg := a.loadConfig()
+	cfg := a.loadConfigOpts(testDaemon)
+	// A test daemon is refused before any side effect (lock, logs, state),
+	// so it can never touch the installed agent.
+	var target *resmon.TestTarget
+	if testDaemon {
+		if err := a.refuseInstalledPaths(); err != nil {
+			return err
+		}
+		t, err := testTarget(cfg, resources.New())
+		if err != nil {
+			return err
+		}
+		target = t
+	}
 	if !once {
 		// One monitor per log directory: two would double every event.
 		unlock, err := lockRun(filepath.Join(a.logDir, "run.lock"))
@@ -230,10 +258,31 @@ func (a *app) cmdRun(args []string, once bool) error {
 	events, samples := a.writers(cfg)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	limiter := notify.New(cfg.Notify, time.Duration(cfg.NotifyCooldownS)*time.Second, col.Notify)
 	d := monitor.Deps{Cfg: cfg, Col: col, Events: events, Samples: samples,
-		Notify: notify.New(cfg.Notify, time.Duration(cfg.NotifyCooldownS)*time.Second, col.Notify),
-		Out:    a.stdout, Errs: a.stderr, Version: version, Self: os.Getpid()}
-	return monitor.Run(ctx, d, once)
+		Notify: limiter, Out: a.stdout, Errs: a.stderr, Version: version, Self: os.Getpid()}
+	if once {
+		return monitor.Run(ctx, d, true)
+	}
+	// Before the new START: was the previous run cut off by a reset?
+	a.checkUnclean(events)
+	resDone, err := a.startResources(ctx, resourceDeps{cfg: cfg, events: events, notifier: limiter, target: target})
+	if err != nil {
+		if target != nil {
+			return err
+		}
+		// The network monitor still runs; the failure is logged loudly.
+		fmt.Fprintln(a.stderr, "netwatch: resource monitor and memory guard not started:", err)
+	}
+	err = monitor.Run(ctx, d, false)
+	stop()
+	if resDone != nil {
+		// Shutdown resumes every group the guard paused.
+		if rerr := <-resDone; err == nil {
+			err = rerr
+		}
+	}
+	return err
 }
 
 func (a *app) cmdReport(args []string) error {
@@ -478,12 +527,17 @@ func (a *app) cmdService(cmd string, args []string) error {
 		}
 		msg, err = svc.Install(collector.ServiceOptions{Exe: exe, Args: gargs, LogDir: logDir, Label: *label})
 		if err == nil {
+			msg += "\n" + guardInstallNote(a.loadConfig(), logDir, runtime.GOOS)
 			if _, serr := os.Stat(filepath.Join(logDir, "stdout.log")); serr == nil {
 				msg += "\nnote: " + filepath.Join(logDir, "stdout.log") + " is from an older version, is no longer written," +
 					" and may contain unredacted command lines; delete it when you no longer need it"
 			}
 		}
 	case "uninstall":
+		// Spec: uninstall resumes every group the guard paused first.
+		if rerr := resumeAllForUninstall(a.logDir); rerr != nil {
+			fmt.Fprintf(a.stderr, "netwatch: could not resume paused jobs (%v); list stopped processes with: netwatch resume --all --check --force\n", rerr)
+		}
 		msg, err = svc.Uninstall(*label)
 	case "status":
 		msg, err = svc.Status(*label)

@@ -23,7 +23,7 @@ func TestAllowlistIsConfiguredPlusVerifiedRunning(t *testing.T) {
 	scan := []resources.Proc{
 		{PID: 10, UID: 501, Exe: "/Users/user/.local/share/claude/versions/2.1.318"},
 		{PID: 11, UID: 501, Exe: "/Users/user/.local/share/claude/versions/2.1.400"}, // never verified
-		{PID: 12, UID: 501, Exe: "/tmp/x/claude/versions/1.0.0/../2.1.500"},         // not a clean path
+		{PID: 12, UID: 501, Exe: "/tmp/x/claude/versions/1.0.0/../2.1.500"},          // not a clean path
 	}
 	e := &Elig{Versions: []string{"2.0.0"}, AllowlistDir: dir}
 	got := e.allowlist(scan)
