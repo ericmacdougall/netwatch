@@ -214,3 +214,42 @@ func TestManyFilesStayBounded(t *testing.T) {
 		t.Errorf("%d %+v", len(cs), st)
 	}
 }
+
+func TestPrograms(t *testing.T) {
+	cases := map[string][]string{
+		"python3.12 big.py --n 5":                             {"python", "big"},
+		"python -m pkg.sub.mod arg":                           {"python", "pkg"},
+		"cd /x && FOO=1 /usr/bin/Python3 run.py; ls | grep a": {"cd", "python", "run", "ls", "grep"},
+		"sudo -u bob nohup node server.js &":                  {"node", "server"},
+		"timeout 30 env A=b make test":                        {"make"},
+		"bash -c 'python3 inner.py && rm x'":                  {"bash", "python", "inner", "rm"},
+		"echo $(date) `uname`":                                {"echo", "date", "uname"},
+		"if true; then ./scripts/Build-2.sh; fi":              {"true", "build-2.sh"},
+		"ls \"a b\" 'c;d'":                                    {"ls"},
+		"":                                                    nil,
+	}
+	for in, want := range cases {
+		got := Programs(in)
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Errorf("%q: got %v want %v", in, got, want)
+		}
+	}
+	if n := len(Programs(strings.Repeat("a1 ; b2 ; c; ", 100) + strings.Repeat("x;", 100))); n > 24 {
+		t.Errorf("not bounded: %d", n)
+	}
+	cs := ParseLine([]byte(line("2026-11-04T16:06:32Z", sess, "", "Bash", "python3.12 job.py")))
+	if len(cs) != 1 || strings.Join(cs[0].Programs, ",") != "python,job" {
+		t.Errorf("ParseLine programs: %+v", cs)
+	}
+}
+
+func FuzzPrograms(f *testing.F) {
+	f.Add("python3 -m x; ls | cat && bash -c 'echo hi'")
+	f.Add("'unterminated")
+	f.Add(strings.Repeat("bash -c '", 50))
+	f.Fuzz(func(t *testing.T, s string) {
+		if n := len(Programs(s)); n > 24 {
+			t.Fatalf("%d programs", n)
+		}
+	})
+}

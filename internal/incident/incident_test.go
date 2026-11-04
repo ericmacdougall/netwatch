@@ -282,3 +282,24 @@ func TestLastClusterOnly(t *testing.T) {
 		t.Fatalf("all=%d last=%d", len(all.Reports), len(last.Reports))
 	}
 }
+
+// Attribution must come from a sample taken before the first report was
+// written; a labelled sample after it (the host is already failing, and the
+// label may describe a different state) must not replace it.
+func TestEstimateIgnoresSamplesAfterTheReport(t *testing.T) {
+	rep := collectFixture(t)
+	r := rep.Reports[0]
+	before := Sample{At: r.Written.Add(-5 * time.Second), Top: []SampleProc{{PID: 10934, Name: "Python", Agent: "agent-before", Confidence: "medium"}}}
+	after := Sample{At: r.Written.Add(30 * time.Second), Top: []SampleProc{{PID: 10934, Name: "Python", Agent: "agent-after", Confidence: "high"}}}
+	e := BuildEstimate(rep.Reports, []Sample{before, after})
+	if e.Attribution == nil || e.Attribution.Agent != "agent-before" {
+		t.Fatalf("attribution %+v", e.Attribution)
+	}
+	// Control: with only the late sample there is no attribution at all.
+	if e := BuildEstimate(rep.Reports, []Sample{after}); e.Attribution != nil {
+		t.Errorf("late sample used: %+v", e.Attribution)
+	}
+	if e.FirstSample == nil || !e.FirstSample.Equal(before.At) {
+		t.Errorf("first sample %v", e.FirstSample)
+	}
+}
