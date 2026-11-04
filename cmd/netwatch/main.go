@@ -266,6 +266,10 @@ func (a *app) cmdRun(args []string, once bool) error {
 		tier = t
 	}
 	if !once {
+		_, envSet := os.LookupEnv("GOMAXPROCS")
+		if n := daemonProcs(envSet, runtime.NumCPU()); n > 0 {
+			runtime.GOMAXPROCS(n)
+		}
 		// One monitor per log directory: two would double every event.
 		unlock, err := lockRun(filepath.Join(a.logDir, "run.lock"))
 		if err != nil {
