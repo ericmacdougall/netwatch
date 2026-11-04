@@ -258,3 +258,19 @@ func TestManualResumeHoldsForTheEpisode(t *testing.T) {
 	r.run(10, 2*time.Second, crit)
 	must(t, r.paused(200), "other groups are still guarded")
 }
+
+// With no daemon running, `netwatch resume` writes the state itself; it
+// must leave the same hold, so a daemon started during the episode does
+// not pause the group again.
+func TestManualResumeWithoutDaemonHoldsTheGroup(t *testing.T) {
+	r := newRig(t, ModePauseKill)
+	r.tool(100, 5*gib, 101)
+	r.run(14, 2*time.Second, crit)
+	must(t, r.paused(100), "setup: 100 paused")
+	key := r.rec(100).Key()
+	_, err := ManualResumeLive(r.st, r.w, r.w, r.at, 100, false, nil)
+	must(t, err == nil, "resume: %v", err)
+	st, err := r.st.Load()
+	must(t, err == nil, "load: %v", err)
+	must(t, st.Episode != nil && st.Episode.Held[key], "lock-free resume must hold %s in the saved episode: %+v", key, st.Episode)
+}
