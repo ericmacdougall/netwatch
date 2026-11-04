@@ -79,3 +79,7 @@ type Signaller interface {
 type Notifier interface {
 	Notify(key, title, msg string) (bool, error)
 }
+
+// SigCONT is SIGCONT on every platform the package builds for (Windows has
+// no syscall.SIGCONT), for callers that inspect a signal.
+const SigCONT = sigCONT

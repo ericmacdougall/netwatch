@@ -49,15 +49,21 @@ func (s SpawnedOnly) Signal(pid int, start time.Time, sig syscall.Signal) error 
 	}
 	var p resources.Proc
 	if err := s.R.Probe(pid, &p); err != nil {
-		return fmt.Errorf("%w: pid %d: %v", ErrNotTarget, pid, err)
+		// Gone (or unreadable): the same outcome the real signaller reports
+		// for a vanished pid, which the executor treats as already done.
+		return fmt.Errorf("%w: pid %d: %v", guard.ErrStartMismatch, pid, err)
 	}
-	if p.PGID != s.Target.PGID {
+	if p.PGID != s.Target.PGID || p.Start.Before(s.Target.Start.Add(-startTol)) {
 		return fmt.Errorf("%w: pid %d is in group %d, not %d", ErrNotTarget, pid, p.PGID, s.Target.PGID)
 	}
 	var leader resources.Proc
 	if err := s.R.Probe(s.Target.PGID, &leader); err != nil {
-		// The leader exited; members may remain, but we can no longer prove
-		// the group is the one we spawned unless the pid is the leader.
+		// The leader exited, so the group can no longer be proven to be the
+		// one we spawned. Only SIGCONT is still allowed, so a stopped member
+		// is never left behind; it cannot harm a process that is running.
+		if sig == guard.SigCONT {
+			return s.Inner.Signal(pid, start, sig)
+		}
 		return fmt.Errorf("%w: group leader %d gone", ErrNotTarget, s.Target.PGID)
 	}
 	if !near(leader.Start, s.Target.Start) {
