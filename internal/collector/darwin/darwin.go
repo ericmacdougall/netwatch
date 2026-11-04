@@ -86,6 +86,9 @@ func (c *Collector) ExePath(pid int) string {
 	if i := bytes.IndexByte(path, 0); i >= 0 {
 		path = path[:i]
 	}
+	if len(path) == 0 || path[0] != '/' {
+		return "" // relative as passed to execve (./run); not a stable identity
+	}
 	return string(path)
 }
 

@@ -3,7 +3,10 @@
 package netrate
 
 import (
+	"path"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -156,12 +159,40 @@ func NewDetector(initial Snapshot, identify Identify) *Detector {
 }
 
 func (d *Detector) idOf(k Key) string {
+	p := ""
 	if d.identify != nil {
-		if p := d.identify(k); p != "" {
-			return "exe:" + p
-		}
+		p = d.identify(k)
+	}
+	// An interpreter's path names the runtime, not the program it runs, so
+	// every python or node program would look like one app. Keep those
+	// per process, as before.
+	if isInterpreter(p) || (p == "" && isInterpreter(k.Name)) {
+		return "pid:" + k.Name + "/" + strconv.Itoa(k.PID)
+	}
+	if p != "" {
+		return "exe:" + p
 	}
 	return "name:" + k.Name
+}
+
+// interpreters are runtimes whose executable says nothing about the program.
+var interpreters = map[string]bool{
+	"python": true, "pythonw": true, "node": true, "nodejs": true, "bun": true, "deno": true,
+	"java": true, "javaw": true, "dotnet": true, "ruby": true, "perl": true, "php": true,
+	"sh": true, "bash": true, "zsh": true, "dash": true, "fish": true, "busybox": true, "env": true,
+	"pwsh": true, "powershell": true, "cmd": true, "wscript": true, "cscript": true, "osascript": true,
+}
+
+// isInterpreter reports whether a path or process name is a known runtime,
+// ignoring case, a .exe suffix and a version suffix (python3.12, node22).
+func isInterpreter(name string) bool {
+	if name == "" {
+		return false
+	}
+	base := strings.ToLower(path.Base(strings.ReplaceAll(name, "\\", "/")))
+	base = strings.TrimSuffix(base, ".exe")
+	base = strings.TrimRight(base, "0123456789.-")
+	return interpreters[base]
 }
 
 func (d *Detector) remember(id string, tick int) {

@@ -175,3 +175,58 @@ func TestDetectorReportsAppAgainAfterForgetWindow(t *testing.T) {
 		t.Fatalf("returning app should be reported once, not as a first-time name: %+v", got)
 	}
 }
+
+// Every python program shares the interpreter's path; each stays its own app.
+func TestDetectorKeepsInterpretersPerProcess(t *testing.T) {
+	exe := func(k Key) string {
+		switch k.Name {
+		case "python3":
+			return "/usr/bin/python3.12"
+		case "node.exe":
+			return `C:\Program Files\nodejs\node.exe`
+		}
+		return ""
+	}
+	d := NewDetector(snap(0, map[Key]Counter{{"python3", 1}: {}}), exe)
+	cur := snap(10*time.Second, map[Key]Counter{
+		{"python3", 1}: {In: 1 << 20}, {"python3", 2}: {In: 100 * 1024},
+		{"node.exe", 3}: {In: 100 * 1024}, {"node.exe", 4}: {In: 100 * 1024},
+		{"ruby", 5}: {In: 100 * 1024}, {"ruby", 6}: {In: 100 * 1024}, // unreadable path, interpreter name
+	})
+	got := d.Observe(cur, Compute(snap(0, map[Key]Counter{{"python3", 1}: {}}), cur), 50)
+	if len(got) != 5 {
+		t.Fatalf("want python3/2, both node.exe and both ruby reported, got %+v", got)
+	}
+}
+
+// After a restart, the seeded processes' executables count as already online.
+func TestDetectorSeedsByExecutable(t *testing.T) {
+	exe := func(k Key) string { return "/usr/bin/" + k.Name }
+	initial := snap(0, map[Key]Counter{{"git", 1}: {}})
+	d := NewDetector(initial, exe)
+	cur := snap(10*time.Second, map[Key]Counter{{"git", 2}: {In: 100 * 1024}})
+	if got := d.Observe(cur, Compute(initial, cur), 50); len(got) != 0 {
+		t.Fatalf("a new PID of a seeded executable is not new: %+v", got)
+	}
+}
+
+// The suppression window is exactly forgetAfter samples since last seen.
+func TestDetectorForgetBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		idle int
+		want int
+	}{{forgetAfter - 1, 0}, {forgetAfter, 1}} {
+		exe := func(Key) string { return "/usr/bin/rsync" }
+		d := NewDetector(snap(0, map[Key]Counter{}), exe)
+		first := snap(10*time.Second, map[Key]Counter{{"rsync", 1}: {In: 100 * 1024}})
+		d.Observe(first, Compute(snap(0, nil), first), 50)
+		empty := snap(0, map[Key]Counter{})
+		for i := 0; i < tc.idle; i++ {
+			d.Observe(empty, Rates{}, 50)
+		}
+		again := snap(20*time.Second, map[Key]Counter{{"rsync", 2}: {In: 100 * 1024}})
+		if got := d.Observe(again, Compute(snap(10*time.Second, nil), again), 50); len(got) != tc.want {
+			t.Fatalf("after %d idle samples got %d events, want %d", tc.idle, len(got), tc.want)
+		}
+	}
+}
