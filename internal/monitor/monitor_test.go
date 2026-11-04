@@ -165,20 +165,29 @@ func (l *lateNet) Net(ctx context.Context, iface string) (netrate.Snapshot, erro
 func TestLateFirstReadingSeedsDetector(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
+	cfg.Interval = 1
 	cfg.Compile()
 	t0 := time.Now()
-	busy := map[netrate.Key]netrate.Counter{{Name: "browser", PID: 5}: {In: 1 << 30}}
-	lc := &lateNet{fakeCollector: fakeCollector{nets: []netrate.Snapshot{{At: t0, HasBytes: true, Procs: busy}}}}
+	k := netrate.Key{Name: "browser", PID: 5}
+	lc := &lateNet{fakeCollector: fakeCollector{nets: []netrate.Snapshot{
+		{At: t0, HasBytes: true, Procs: map[netrate.Key]netrate.Counter{k: {In: 1 << 30}}},
+		{At: t0.Add(time.Second), HasBytes: true, Procs: map[netrate.Key]netrate.Counter{k: {In: 1<<30 + 1<<20}}},
+	}}}
 	d := Deps{Cfg: &cfg, Col: lc,
 		Events:  eventlog.NewWriter(filepath.Join(dir, "events.jsonl"), 1<<20),
-		Samples: eventlog.NewWriter(filepath.Join(dir, "samples.jsonl"), 1<<20), OnceWait: time.Millisecond}
-	if err := Run(context.Background(), d, true); err != nil {
+		Samples: eventlog.NewWriter(filepath.Join(dir, "samples.jsonl"), 1<<20)}
+	ctx, cancel := context.WithTimeout(context.Background(), 2500*time.Millisecond)
+	defer cancel()
+	if err := Run(ctx, d, false); err != nil {
 		t.Fatal(err)
+	}
+	if lc.calls < 3 {
+		t.Fatalf("want at least two cycles after the failed first read, got %d Net calls", lc.calls)
 	}
 	evs, _ := eventlog.ReadSince(filepath.Join(dir, "events.jsonl"), time.Time{}, func(e record.Event) string { return e.TS })
 	for _, e := range evs {
 		if e.Event == record.NewNetApp {
-			t.Fatalf("seeding failed, got %+v", e)
+			t.Fatalf("an app already online at the first reading was reported as new: %+v", e)
 		}
 	}
 }
