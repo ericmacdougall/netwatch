@@ -21,6 +21,17 @@ const (
 	Orphan        = "ORPHAN"
 	Runaway       = "RUNAWAY"
 	OrphansKilled = "ORPHANS_KILLED"
+
+	// Resource and guard events (GoodQA work-tracker-automatic#35742).
+	ResourceAlert         = "RESOURCE_ALERT"
+	GuardPause            = "GUARD_PAUSE"
+	GuardResume           = "GUARD_RESUME"
+	GuardKill             = "GUARD_KILL"
+	HostAtRiskUnprotected = "HOST_AT_RISK_UNPROTECTED"
+	ModeChange            = "MODE_CHANGE"
+	Incident              = "INCIDENT"
+	AllowlistChange       = "ALLOWLIST_CHANGE"
+	GuardTestTarget       = "GUARD_TEST_TARGET"
 )
 
 // FlexInt decodes a JSON number or numeric string; the prototype wrote
