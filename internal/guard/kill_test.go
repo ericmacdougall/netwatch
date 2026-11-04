@@ -306,21 +306,53 @@ func TestNonKillableTiersArePausedNeverKilled(t *testing.T) {
 	}
 }
 
-func TestWithinBudgetBigJobNeverPausedOrKilled(t *testing.T) {
+func budgeted(max uint64) *Budget { return &Budget{MaxBytes: max, MaxProcs: 8} }
+
+func TestWithinBudgetGroupIsPausedLastAndNeverKilled(t *testing.T) {
+	// Alone under danger a within-budget causal group is paused, never killed.
 	r := newRig(t, ModePauseKill)
-	r.addGroup(gdef{pgid: 100, fp: 5 * gib, tier: TierTool, envOK: true, allow: true, budget: &Budget{MaxBytes: 8 * gib, MaxProcs: 8}}, 101)
+	r.addGroup(gdef{pgid: 100, fp: 7 * gib, tier: TierTool, envOK: true, allow: true, budget: budgeted(8 * gib)}, 101)
 	r.run(3, 2*time.Second, normal)
-	for i := 0; i < 60; i++ {
-		r.grow(100, gib/32)
-		r.poll(2*time.Second, crit)
-	}
-	must(t, len(r.w.log) == 0, "a within-budget job must never be signalled: %v", r.w.log)
-	// Control: the same job past its budget is undeclared, so it is paused.
+	r.run(10, 2*time.Second, crit)
+	must(t, r.paused(100), "a within-budget causal group must be paused")
+	r.comp = 980
+	r.run(150, 2*time.Second, crit) // every kill path is reachable
+	must(t, r.w.count(syscall.SIGTERM) == 0 && r.w.count(syscall.SIGKILL) == 0, "a within-budget group is never killed")
+
+	// With an undeclared causal group present it is paused first, even when
+	// the within-budget group is larger.
+	o := newRig(t, ModePause)
+	o.addGroup(gdef{pgid: 100, fp: 7 * gib, tier: TierTool, envOK: true, allow: true, budget: budgeted(8 * gib)}, 101)
+	o.tool(200, 5*gib, 201)
+	o.run(3, 2*time.Second, normal)
+	o.run(3, 2*time.Second, crit)
+	must(t, o.paused(200), "the undeclared group must be paused first")
+	must(t, !o.paused(100), "the within-budget group waits until the undeclared one is paused")
+	o.run(7, 2*time.Second, crit)
+	must(t, o.paused(100), "the within-budget group is paused once the rate limit allows")
+	f1, _ := o.first(ActPause, 200)
+	f2, _ := o.first(ActPause, 100)
+	must(t, f1.Before(f2), "order wrong: %v then %v", f1, f2)
+
+	// An over-budget group counts as undeclared and may be killed.
 	c := newRig(t, ModePauseKill)
-	c.addGroup(gdef{pgid: 100, fp: 9 * gib, tier: TierTool, envOK: true, allow: true, budget: &Budget{MaxBytes: 8 * gib, MaxProcs: 8}}, 101)
+	c.addGroup(gdef{pgid: 100, fp: 9 * gib, tier: TierTool, envOK: true, allow: true, budget: budgeted(8 * gib)}, 101)
 	c.run(3, 2*time.Second, normal)
 	c.run(10, 2*time.Second, crit)
-	must(t, c.paused(100), "control: over budget counts as undeclared and is paused")
+	must(t, c.paused(100), "control: over budget is paused")
+}
+
+func TestNEG2HealthyHostZeroActionsWithOrWithoutBudget(t *testing.T) {
+	for _, b := range []*Budget{nil, budgeted(8 * gib)} {
+		r := newRig(t, ModePauseKill)
+		r.addGroup(gdef{pgid: 100, fp: 12 * gib, tier: TierTool, envOK: true, allow: true, budget: b}, 101)
+		r.run(100, 2*time.Second, normal)
+		for i := 0; i < 100; i++ { // growing 0.5 GB/min, healthy
+			r.grow(100, gib/60)
+			r.poll(2*time.Second, normal)
+		}
+		must(t, len(r.acts) == 0 && len(r.w.log) == 0, "healthy host (budget %v) must see zero actions, got %d", b, len(r.acts))
+	}
 }
 
 func TestPidReuseIsNeverSignalled(t *testing.T) {
