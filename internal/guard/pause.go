@@ -53,6 +53,7 @@ func (m *Machine) pauseStep(s Snapshot, v *view) []Action {
 		g      *gview
 		why    string
 		growth uint64
+		within bool // inside a declared budget: paused last, never killed
 	}
 	var cs []cand
 	for _, g := range v.groups {
@@ -62,22 +63,23 @@ func (m *Machine) pauseStep(s Snapshot, v *view) []Action {
 		if t, ok := m.st.LastResume[g.Key]; ok && t.Equal(now) {
 			continue // released this very poll (max pause): do not flap
 		}
-		// A declared budget explains a big job; it is never paused.
-		if withinBudget(g.G, g.FP) {
-			continue
-		}
 		why := m.causal(s, v, g)
 		if why == "" {
 			continue
 		}
-		cs = append(cs, cand{g, why, pos(g.FP, ep.DangerBase[g.Key])})
+		cs = append(cs, cand{g, why, pos(g.FP, ep.DangerBase[g.Key]), withinBudget(g.G, g.FP)})
 	}
 	if len(cs) == 0 {
 		return nil
 	}
-	// Undeclared and over-budget groups are all that remain here, so the
-	// order is growth since danger, then footprint.
+	// Undeclared and over-budget groups first, then growth since danger,
+	// then footprint. A within-budget group may still be paused (a pause
+	// loses no work and leaving it running can reset the host); the kill
+	// gate never kills it.
 	sort.SliceStable(cs, func(i, j int) bool {
+		if cs[i].within != cs[j].within {
+			return !cs[i].within
+		}
 		if cs[i].growth != cs[j].growth {
 			return cs[i].growth > cs[j].growth
 		}
