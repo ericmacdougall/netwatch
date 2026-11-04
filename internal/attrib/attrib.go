@@ -20,11 +20,11 @@ import (
 var semver = regexp.MustCompile(`^\d+\.\d+\.\d+([-+][0-9A-Za-z.+-]+)?$`)
 
 // ClaudeFromExe reports whether exe is a Claude Code binary and returns its
-// version. The exe must be an absolute, clean path with a directory
-// sequence the installers create:
-//
-//	.../claude/versions/<semver>[/...]   (the native installer)
-//	.../claude-code/<semver>[/...]       (the copy a desktop app unpacks)
+// version. The exe must be an absolute, clean path with the directory
+// sequence the native installer creates, .../claude/versions/<semver>[/...]
+// (verified on a live install, where ~/.local/bin/claude is a symlink to
+// it). Other layouts are deliberately not recognised until verified: a
+// false match would make an arbitrary program's children guard-eligible.
 //
 // A process name proves nothing: any program can set its comm to "2.1.318"
 // (the native binary's own name is its version), so comm is only a hint.
@@ -36,9 +36,6 @@ func ClaudeFromExe(exe string) (version string, ok bool) {
 	for i := 0; i < len(seg); i++ {
 		if seg[i] == "claude" && i+2 < len(seg) && seg[i+1] == "versions" && semver.MatchString(seg[i+2]) {
 			return seg[i+2], true
-		}
-		if seg[i] == "claude-code" && i+1 < len(seg) && semver.MatchString(seg[i+1]) {
-			return seg[i+1], true
 		}
 	}
 	return "", false

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -77,11 +76,16 @@ func (d DirReader) List(rel string, max int) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.Open(p)
+	// Same open as Tail: os.Open would block forever on a FIFO left where
+	// the directory should be.
+	f, err := openNoFollow(p)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
+	if st, err := f.Stat(); err != nil || !st.IsDir() {
+		return nil, errUnsafe
+	}
 	names, err := f.Readdirnames(max)
 	if err == io.EOF {
 		err = nil

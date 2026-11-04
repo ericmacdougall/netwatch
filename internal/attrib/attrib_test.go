@@ -13,10 +13,9 @@ import (
 
 func TestClaudeFromExe(t *testing.T) {
 	yes := map[string]string{
-		"/home/user/.local/share/claude/versions/2.1.318":                         "2.1.318",
-		"/Users/user/.local/share/claude/versions/2.1.318/bin/claude":             "2.1.318",
-		"/Users/user/Library/Application Support/Claude/claude-code/2.0.5/claude": "2.0.5",
-		"/opt/claude/versions/3.0.0-beta.1":                                       "3.0.0-beta.1",
+		"/home/user/.local/share/claude/versions/2.1.318":             "2.1.318",
+		"/Users/user/.local/share/claude/versions/2.1.318/bin/claude": "2.1.318",
+		"/opt/claude/versions/3.0.0-beta.1":                           "3.0.0-beta.1",
 	}
 	for exe, ver := range yes {
 		if got, ok := ClaudeFromExe(exe); !ok || got != ver {
@@ -25,13 +24,14 @@ func TestClaudeFromExe(t *testing.T) {
 	}
 	no := []string{
 		"", "claude", "versions/2.1.318",
-		"/tmp/evil/2.1.318",                          // version-shaped name, wrong directory
-		"/usr/local/bin/claude",                      // name alone is not identity
-		"/home/user/claude/versions/latest",          // not a version
-		"/home/user/claude/versions/2.1",             // not semver
-		"/home/user/claude/versions/2.1.318/../../x", // not a clean path
-		"/home/user/claude/versions",                 // no version segment
-		"/home/user/notclaude/versions/2.1.318",      // segment must be exactly claude
+		"/tmp/evil/2.1.318",                                                       // version-shaped name, wrong directory
+		"/usr/local/bin/claude",                                                   // name alone is not identity
+		"/home/user/claude/versions/latest",                                       // not a version
+		"/home/user/claude/versions/2.1",                                          // not semver
+		"/home/user/claude/versions/2.1.318/../../x",                              // not a clean path
+		"/home/user/claude/versions",                                              // no version segment
+		"/home/user/notclaude/versions/2.1.318",                                   // segment must be exactly claude
+		"/Users/user/Library/Application Support/Claude/claude-code/2.0.5/claude", // unverified layout
 	}
 	for _, exe := range no {
 		if v, ok := ClaudeFromExe(exe); ok {
