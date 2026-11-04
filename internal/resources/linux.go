@@ -331,3 +331,20 @@ func (r *linuxReader) ExePath(pid int) string {
 	l, _ := os.Readlink(r.procPath(pb[:0], pid, "exe"))
 	return l
 }
+
+// GroupsMembers implements BatchLister with a single /proc pass.
+func (r *linuxReader) GroupsMembers(pgids []int, out map[int][]int) error {
+	want := make(map[int]bool, len(pgids))
+	for _, g := range pgids {
+		want[g] = true
+	}
+	return r.listPIDs(func(pid int) bool {
+		var pb [96]byte
+		_ = r.readSmall(r.procPath(pb[:0], pid, "stat"), func(b []byte) {
+			if sf, ok := ParseStat(b); ok && want[sf.PGRP] {
+				out[sf.PGRP] = append(out[sf.PGRP], pid)
+			}
+		})
+		return true
+	})
+}

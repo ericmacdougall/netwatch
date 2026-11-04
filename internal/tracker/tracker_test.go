@@ -362,3 +362,43 @@ func TestTermsSortedAndShare(t *testing.T) {
 		t.Fatal("share of nothing")
 	}
 }
+
+// batchSrc lists every group in one call, as the Linux reader does.
+type batchSrc struct {
+	*fakeSrc
+	batchCalls int
+}
+
+func (b *batchSrc) GroupsMembers(pgids []int, out map[int][]int) error {
+	b.batchCalls++
+	for _, p := range b.procs {
+		for _, g := range pgids {
+			if p.PGID == g {
+				out[g] = append(out[g], p.PID)
+			}
+		}
+	}
+	return nil
+}
+
+func TestBatchListerUsedOncePerPoll(t *testing.T) {
+	f := &batchSrc{fakeSrc: newFake()}
+	var gs []GroupInfo
+	for _, pg := range []int{100, 200, 300} {
+		f.put(pg, 1, pg, t0, gb)
+		f.put(pg+1, pg, pg, t0, gb)
+		gs = append(gs, GroupInfo{PGID: pg, LeaderStart: t0})
+	}
+	tr := New(f, Config{})
+	tr.SetGroups(gs)
+	terms := tr.Poll(t0.Add(time.Second), sys())
+	if f.batchCalls != 1 || len(f.lists) != 0 {
+		t.Fatalf("batch calls %d, per-group listings %d", f.batchCalls, len(f.lists))
+	}
+	for _, pg := range []int{100, 200, 300} {
+		g := find(terms, GroupKey(pg, t0)).Group
+		if g.Footprint != 2*gb || len(g.Members) != 2 {
+			t.Fatalf("group %d: %+v", pg, g)
+		}
+	}
+}

@@ -109,3 +109,36 @@ func baseName(p string) string {
 	}
 	return p
 }
+
+func TestLinuxBatchMatchesPerGroup(t *testing.T) {
+	r := New().(*linuxReader)
+	var cmds []*exec.Cmd
+	var pgs []int
+	for i := 0; i < 3; i++ {
+		c := exec.Command("sh", "-c", "sleep 30 & sleep 30 & wait")
+		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err := c.Start(); err != nil {
+			t.Fatal(err)
+		}
+		cmds = append(cmds, c)
+		pgs = append(pgs, c.Process.Pid)
+	}
+	t.Cleanup(func() {
+		for _, c := range cmds { // our own spawned groups only
+			syscall.Kill(-c.Process.Pid, syscall.SIGKILL)
+			c.Wait()
+		}
+	})
+	time.Sleep(300 * time.Millisecond)
+	out := map[int][]int{}
+	if err := r.GroupsMembers(pgs, out); err != nil {
+		t.Fatal(err)
+	}
+	for _, pg := range pgs {
+		one, _ := r.GroupMembers(pg)
+		got := out[pg]
+		if len(one) < 3 || len(got) != len(one) {
+			t.Fatalf("group %d: batch %v per-group %v", pg, got, one)
+		}
+	}
+}

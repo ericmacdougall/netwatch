@@ -255,10 +255,27 @@ func (t *Tracker) Poll(now time.Time, sys resources.System) []guard.Term {
 		order = order[:t.cfg.MaxGroups]
 	}
 
+	// One pass lists every group where the platform has no group index.
+	var batch map[int][]int
+	if bl, ok := t.src.(resources.BatchLister); ok && len(order) > 1 {
+		batch = make(map[int][]int, len(order))
+		pgids := make([]int, len(order))
+		for i, g := range order {
+			pgids[i] = g.info.PGID
+		}
+		if bl.GroupsMembers(pgids, batch) != nil {
+			batch = nil // fall back to per-group listings
+		}
+	}
+
 	terms := make([]guard.Term, 0, len(order)+len(t.inelV)+1)
 	var sum uint64
 	for _, g := range order {
-		grp, reused := t.measure(g, now)
+		var pre []int
+		if batch != nil {
+			pre = batch[g.info.PGID]
+		}
+		grp, reused := t.measure(g, now, pre, batch != nil)
 		if reused {
 			t.stats.Reused++
 			delete(t.groups, GroupKey(g.info.PGID, g.info.LeaderStart))
@@ -304,9 +321,16 @@ func (t *Tracker) Poll(now time.Time, sys resources.System) []guard.Term {
 
 // measure reads one group. reused is true if the group's leader pid now
 // belongs to a different process, so the recorded group no longer exists.
-func (t *Tracker) measure(g *groupState, now time.Time) (grp *guard.Group, reused bool) {
-	pids, err := t.src.AppendGroupMembers(t.pids[:0], g.info.PGID)
-	t.pids = pids[:0]
+func (t *Tracker) measure(g *groupState, now time.Time, pre []int, havePre bool) (grp *guard.Group, reused bool) {
+	var pids []int
+	var err error
+	if havePre {
+		sort.Ints(pre)
+		pids = pre
+	} else {
+		pids, err = t.src.AppendGroupMembers(t.pids[:0], g.info.PGID)
+		t.pids = pids[:0]
+	}
 	grp = &guard.Group{
 		PGID: g.info.PGID, LeaderStart: g.info.LeaderStart, Tier: g.info.Tier,
 		Agent: g.info.Agent, Cmd: g.info.Cmd, ClaudeVer: g.info.ClaudeVer,
