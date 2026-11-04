@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"sync/atomic"
 	"time"
 
 	"github.com/ericmacdougall/netwatch/internal/safeio"
@@ -117,9 +118,17 @@ type body struct {
 // timeLayout reads "2026-11-04 09:07:07.05 -0700" with any fraction length.
 const timeLayout = "2006-01-02 15:04:05.999 -0700"
 
+// parses counts ParseFile calls, for tests and diagnostics: the daemon
+// must not re-read the same reports on every scan.
+var parses atomic.Int64
+
+// Parses returns how many reports have been read so far.
+func Parses() int64 { return parses.Load() }
+
 // ParseFile reads path through safeio (regular file, no symlink, 16 MiB
 // cap) and parses it.
 func ParseFile(path string) (*Report, error) {
+	parses.Add(1)
 	b, err := safeio.ReadFile(path, safeio.Opts{Max: MaxReportBytes})
 	if err != nil {
 		return nil, err

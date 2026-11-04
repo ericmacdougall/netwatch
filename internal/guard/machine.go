@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/ericmacdougall/netwatch/internal/redact"
 	"sort"
 	"strings"
 	"sync"
@@ -207,9 +208,19 @@ func (m *Machine) Step(s Snapshot) []Action {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if s.Sys.RAM == 0 || s.At.IsZero() {
-		// A failed read means no action; the monitor logs the error.
-		m.lastErr = "system reading unavailable: guard takes no action"
-		return nil
+		// A failed read means no new pause or kill; the monitor logs the
+		// error. The pause time limits still apply, so a group is never held
+		// past them just because readings keep failing.
+		m.lastErr = "system reading unavailable: guard takes no new action"
+		if s.At.IsZero() {
+			return nil
+		}
+		blind := Snapshot{At: s.At} // pressure unknown: never "still critical"
+		acts := m.maxPause(blind, buildView(blind))
+		if len(acts) > 0 {
+			m.dirty = true
+		}
+		return acts
 	}
 	m.lastErr = ""
 	now := s.At
@@ -257,7 +268,7 @@ func (m *Machine) Step(s Snapshot) []Action {
 	m.updatePathA(s)
 	acts = append(acts, m.membersStep(s, v)...)
 	acts = append(acts, m.termProgress(s, v)...)
-	if pauseOK && m.cfg.Mode.canKill() && !m.cfg.NoKill {
+	if pauseOK && m.killAllowed() {
 		acts = append(acts, m.killStep(s, v)...)
 	}
 	m.endEpisodeIfDone(s)
@@ -478,5 +489,5 @@ func (m *Machine) unprotected(s Snapshot, v *view) []Action {
 	ep.Unprotected[big.Key] = true
 	m.dirty = true
 	return []Action{{Kind: ActUnprotected, Footprint: big.FP, Signals: signalNames(s), DangerSince: ep.Since,
-		Reason: fmt.Sprintf("HOST_AT_RISK_UNPROTECTED: largest consumer %s (%d bytes) is not guarded", big.Key, big.FP)}}
+		Reason: fmt.Sprintf("HOST_AT_RISK_UNPROTECTED: largest consumer %s (%d bytes) is not guarded", redact.DisplayKey(big.Key), big.FP)}}
 }

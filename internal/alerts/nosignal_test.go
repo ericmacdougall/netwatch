@@ -137,7 +137,7 @@ func TestAlertsImportsAreAllowlisted(t *testing.T) {
 	allowed := map[string]bool{
 		"fmt": true, "sort": true, "strings": true, "time": true,
 		modPrefix + "internal/notify": true, modPrefix + "internal/record": true,
-		modPrefix + "internal/resources": true,
+		modPrefix + "internal/resources": true, modPrefix + "internal/redact": true, // text only
 	}
 	for _, p := range imps {
 		if !allowed[p] {

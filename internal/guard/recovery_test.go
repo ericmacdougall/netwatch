@@ -394,3 +394,39 @@ func TestIntentIsDurableBeforeAnySignal(t *testing.T) {
 	must(t, r.w.count(syscall.SIGSTOP) > 0 && r.w.count(syscall.SIGTERM) > 0, "setup: pause and term happened")
 	must(t, len(bad) == 0, "signals sent before the intent was saved: %v", bad)
 }
+
+// TestKillInFlightNeverEndsInSIGKILLWhenKillDisabled pins red-team F4: a
+// SIGTERM sent by a pause+kill daemon must not be followed by SIGKILL after a
+// restart into a config that cannot kill (pause mode, or NoKill on macOS).
+func TestKillInFlightNeverEndsInSIGKILLWhenKillDisabled(t *testing.T) {
+	for _, name := range []string{"pause mode", "NoKill", "control", "shutdown at once"} {
+		r := killRig(t, ModePauseKill)
+		r.w.procs[101].ignoreTerm = true
+		r.runCrit(60, 2*time.Second)
+		_, ok := r.termAt()
+		must(t, ok && r.w.count(syscall.SIGKILL) == 0, "%s: setup: SIGTERM sent, no SIGKILL yet", name)
+		switch name {
+		case "pause mode":
+			r.restart(ModePause)
+		case "NoKill":
+			r.cfg.NoKill = true
+			r.restart(ModePauseKill)
+		case "control":
+			r.restart(ModePauseKill)
+		case "shutdown at once":
+			r.restart(ModePause)
+			r.ex.Shutdown()
+			must(t, r.w.count(syscall.SIGKILL) == 0 && r.noneStopped(), "%s: shutdown must resume, not SIGKILL", name)
+			continue
+		}
+		r.run(10, 2*time.Second, crit)
+		if name == "control" {
+			must(t, r.w.count(syscall.SIGKILL) > 0, "control: pause+kill finishes the kill")
+			continue
+		}
+		must(t, r.w.count(syscall.SIGKILL) == 0, "%s: must never SIGKILL", name)
+		must(t, r.rec(100) == nil || r.rec(100).Phase != PhaseTerm, "%s: the terming record must be dropped", name)
+		r.ex.Shutdown()
+		must(t, r.w.count(syscall.SIGKILL) == 0, "%s: shutdown must not SIGKILL", name)
+	}
+}

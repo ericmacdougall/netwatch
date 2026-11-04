@@ -274,3 +274,24 @@ func TestManualResumeWithoutDaemonHoldsTheGroup(t *testing.T) {
 	must(t, err == nil, "load: %v", err)
 	must(t, st.Episode != nil && st.Episode.Held[key], "lock-free resume must hold %s in the saved episode: %+v", key, st.Episode)
 }
+
+// blind polls n times with a failed system reading (RAM 0).
+func (r *rig) blind(n int, dt time.Duration) {
+	for i := 0; i < n; i++ {
+		r.at = r.at.Add(dt)
+		acts := r.m.Step(Snapshot{At: r.at})
+		r.ex.Apply(acts)
+		r.acts = append(r.acts, acts...)
+	}
+}
+
+// TestMaxPauseAppliesWhileReadingsFail pins red-team F7: failed system
+// readings must not hold a paused group past the pause time limit.
+func TestMaxPauseAppliesWhileReadingsFail(t *testing.T) {
+	r := maxPauseRig(t, ModePause)
+	r.blind(29, time.Minute)
+	must(t, r.paused(100), "before 30m a failed read takes no action")
+	must(t, r.countKind(ActPause) == 1, "a failed read never pauses anything new")
+	r.blind(3, time.Minute)
+	must(t, !r.paused(100) && r.noneStopped(), "must resume at 30m even while readings fail")
+}

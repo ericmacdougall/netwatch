@@ -163,3 +163,41 @@ func TestRealSignalsPauseResumeAndKillSequence(t *testing.T) {
 		t.Errorf("signaller was asked to touch pid %d outside the spawn set", pid)
 	}
 }
+
+// failStart fails every start read, as an unreadable /proc entry would.
+type failStart struct{}
+
+func (failStart) Start(int) (time.Time, error) { return time.Time{}, errors.New("read failed") }
+
+// TestUnreadableStartStillResumes pins red-team F2: when a stopped process
+// exists but its start time cannot be read, SIGCONT is still sent (it
+// cannot harm anything) while SIGSTOP and SIGKILL are refused and reported.
+// Only processes this test spawned are signalled.
+func TestUnreadableStartStillResumes(t *testing.T) {
+	j := spawn(t)
+	pid := j.child.Process.Pid
+	o := &ownOnly{spawned: map[int]bool{j.pgid: true, pid: true}, inner: OSSignaller{Starts: failStart{}, Self: -1}}
+	defer syscall.Kill(pid, syscall.SIGCONT)
+
+	err := o.Signal(pid, j.cstart, syscall.SIGSTOP)
+	must(t, errors.Is(err, ErrStartUnreadable) && !errors.Is(err, ErrStartMismatch), "stop must be refused as unreadable: %v", err)
+	must(t, !strings.HasPrefix(psState(pid), "T"), "nothing stopped on an unreadable start")
+
+	must(t, syscall.Kill(pid, syscall.SIGSTOP) == nil, "setup: stop our own child")
+	for i := 0; i < 50 && !strings.HasPrefix(psState(pid), "T"); i++ {
+		time.Sleep(20 * time.Millisecond)
+	}
+	must(t, strings.HasPrefix(psState(pid), "T"), "setup: child stopped")
+	must(t, o.Signal(pid, j.cstart, syscall.SIGCONT) == nil, "SIGCONT must be sent when the start is unreadable")
+	for i := 0; i < 50 && strings.HasPrefix(psState(pid), "T"); i++ {
+		time.Sleep(20 * time.Millisecond)
+	}
+	must(t, !strings.HasPrefix(psState(pid), "T"), "child must run again, state %q", psState(pid))
+	must(t, errors.Is(o.Signal(pid, j.cstart, syscall.SIGKILL), ErrStartUnreadable), "kill must be refused")
+
+	// A gone pid is not seen as existing (so it reads as a mismatch). No
+	// signal is sent here: the pid could be reused.
+	j.child.Process.Kill()
+	j.child.Wait()
+	must(t, !exists(pid), "a reaped child must not exist")
+}

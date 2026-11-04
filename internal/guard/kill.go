@@ -140,6 +140,15 @@ func (m *Machine) termProgress(s Snapshot, v *view) []Action {
 		if r.Phase != PhaseTerm {
 			continue
 		}
+		if !m.killAllowed() {
+			// A kill begun under another config (for example before a
+			// restart into pause mode or on macOS) must not end in SIGKILL.
+			// The SIGTERM already sent stands; release the group.
+			acts = append(acts, m.resumeAction(r, "kill disabled: SIGTERM sent earlier, no SIGKILL"))
+			delete(m.st.Groups, r.Key())
+			m.dirty = true
+			continue
+		}
 		g := v.byKey[r.Key()]
 		early := g != nil && g.FP > r.FPAtTerm && g.FP-r.FPAtTerm > m.cfg.KillEarlyGrowth
 		if s.At.Sub(r.TermAt) < m.cfg.KillGrace && !early {
@@ -156,3 +165,6 @@ func (m *Machine) termProgress(s Snapshot, v *view) []Action {
 	}
 	return acts
 }
+
+// killAllowed reports whether this machine may send SIGKILL at all.
+func (m *Machine) killAllowed() bool { return m.cfg.Mode.canKill() && !m.cfg.NoKill }

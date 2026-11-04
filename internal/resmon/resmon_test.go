@@ -307,6 +307,30 @@ func TestFailedSystemReadSignalsNothing(t *testing.T) {
 	}
 }
 
+// Readings that fail after a pause must not hold the group past the
+// 30 minute pause limit (red-team F7).
+func TestFailedReadsStillReleaseAfterMaxPause(t *testing.T) {
+	f := newFake()
+	f.sys = critical
+	f.add(100, 1, 100, 12*gib, gib)
+	h := newHarness(t, f, guard.ModePause, fixedClassifier{tool: []int{100}}, nil)
+	h.run(3 * time.Minute)
+	if !h.stopped(100) {
+		t.Fatalf("setup: group not paused: %v", h.sigs)
+	}
+	f.sysErr = errors.New("sysctl failed")
+	h.run(31 * time.Minute)
+	cont := false
+	for _, s := range h.sigs {
+		if s.pid == 100 && s.s == syscall.SIGCONT {
+			cont = true
+		}
+	}
+	if !cont {
+		t.Fatalf("paused group held past 30m while readings failed: %v", h.sigs)
+	}
+}
+
 // A healthy host gives zero guard signals and writes samples.
 func TestHealthyHostNoSignalsAndSamplesWritten(t *testing.T) {
 	f := newFake()

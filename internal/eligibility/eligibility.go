@@ -47,7 +47,8 @@ type Input struct {
 	// Args returns argv (optional; used to spot interactive/login shells
 	// and to build a redacted command line).
 	Args func(pid int) []string
-	// NeverSignal overrides DefaultNeverSignal when non-nil.
+	// NeverSignal adds to DefaultNeverSignal; it never replaces it, so a
+	// config entry cannot unprotect a VM, container or database.
 	NeverSignal []string
 	// Allowlist is the set of Claude versions kill may apply to.
 	Allowlist []string
@@ -102,10 +103,7 @@ type classifier struct {
 func Classify(in Input) Output {
 	c := &classifier{in: in, procs: make(map[int]*resources.Proc, len(in.Procs)), tbl: make(map[int]resources.Proc, len(in.Procs)),
 		kids: map[int][]int{}, rule: map[int]string{}, claude: map[int]string{}}
-	c.never = in.NeverSignal
-	if c.never == nil {
-		c.never = DefaultNeverSignal
-	}
+	c.never = append(append([]string(nil), DefaultNeverSignal...), in.NeverSignal...)
 	for i := range in.Procs {
 		p := &in.Procs[i]
 		c.procs[p.PID] = p

@@ -2,6 +2,7 @@ package jetsam
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -22,8 +23,18 @@ const (
 type ScanLimits struct {
 	MaxFiles int       // newest N reports are parsed
 	MaxBytes int64     // total bytes of reports parsed
-	Since    time.Time // skip reports whose file name time is older (zero: all)
+	Since    time.Time // skip reports written before this (zero: all)
+	// MaxReport caps one report (0: MaxReportBytes). The daemon uses a
+	// lower cap than the incident command.
+	MaxReport int64
+	// Seen, when set, skips a file the caller already parsed (same name,
+	// size and modification time) without reading it again.
+	Seen func(name string, size int64, mod time.Time) bool
 }
+
+// sinceSlack allows for a report file written a little before the time
+// inside it.
+const sinceSlack = time.Minute
 
 // Skip records one file that was not parsed and why.
 type Skip struct {
@@ -80,8 +91,20 @@ func ScanDir(dir string, lim ScanLimits) (*ScanResult, error) {
 			res.Skipped = append(res.Skipped, Skip{p, "not a regular file"})
 			continue
 		}
-		if fi.Size() > MaxReportBytes {
-			res.Skipped = append(res.Skipped, Skip{p, "over the 16 MiB report limit"})
+		maxReport := lim.MaxReport
+		if maxReport <= 0 || maxReport > MaxReportBytes {
+			maxReport = MaxReportBytes
+		}
+		if fi.Size() > maxReport {
+			res.Skipped = append(res.Skipped, Skip{p, fmt.Sprintf("over the %d MiB report limit", maxReport>>20)})
+			continue
+		}
+		// Cheap filters first: parsing a large report costs far more than
+		// a stat, and the daemon scans every few seconds.
+		if !lim.Since.IsZero() && fi.ModTime().Before(lim.Since.Add(-sinceSlack)) {
+			continue
+		}
+		if lim.Seen != nil && lim.Seen(n, fi.Size(), fi.ModTime()) {
 			continue
 		}
 		if total+fi.Size() > lim.MaxBytes {

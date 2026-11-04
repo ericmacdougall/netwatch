@@ -56,7 +56,7 @@ func (m *Machine) Shutdown() []Action {
 	var acts []Action
 	for _, r := range m.st.sortedRecords() {
 		acts = append(acts, m.resumeAction(r, "orderly shutdown"))
-		if r.Phase == PhaseTerm {
+		if r.Phase == PhaseTerm && m.killAllowed() {
 			var termed []Member
 			for _, x := range r.Members {
 				if x.Termed {
