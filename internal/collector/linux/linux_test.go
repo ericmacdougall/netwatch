@@ -59,3 +59,13 @@ func sameFile(t *testing.T, a, b string) bool {
 	sb, errB := os.Stat(b)
 	return errA == nil && errB == nil && os.SameFile(sa, sb)
 }
+
+func TestArgsOfSelf(t *testing.T) {
+	got := New().Args(os.Getpid())
+	if len(got) != len(os.Args) || (len(got) > 1 && got[1] != os.Args[1]) {
+		t.Fatalf("Args(self) = %q, want %q", got, os.Args)
+	}
+	if New().Args(1<<30) != nil {
+		t.Fatal("Args of a missing PID should be nil")
+	}
+}

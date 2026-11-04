@@ -5,6 +5,7 @@ package darwin
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -79,17 +80,52 @@ func (c *Collector) Ping(ctx context.Context, host string, count int) *health.Pi
 // user's own processes without spawning a helper.
 func (c *Collector) ExePath(pid int) string {
 	buf, err := unix.SysctlRaw("kern.procargs2", pid)
-	if err != nil || len(buf) <= 4 {
+	if err != nil {
 		return ""
 	}
-	path := buf[4:] // after argc
-	if i := bytes.IndexByte(path, 0); i >= 0 {
-		path = path[:i]
-	}
-	if len(path) == 0 || path[0] != '/' {
+	exe, _ := parseProcArgs(buf)
+	if exe == "" || exe[0] != '/' {
 		return "" // relative as passed to execve (./run); not a stable identity
 	}
-	return string(path)
+	return exe
+}
+
+// Args reads the command line from kern.procargs2 (own processes only).
+func (c *Collector) Args(pid int) []string {
+	buf, err := unix.SysctlRaw("kern.procargs2", pid)
+	if err != nil {
+		return nil
+	}
+	_, args := parseProcArgs(buf)
+	return args
+}
+
+// parseProcArgs splits a kern.procargs2 buffer: a native-endian int32 argc,
+// the exec path, NUL padding, then argc NUL-terminated arguments.
+func parseProcArgs(buf []byte) (exe string, args []string) {
+	if len(buf) <= 4 {
+		return "", nil
+	}
+	argc := int(int32(binary.LittleEndian.Uint32(buf[:4])))
+	rest := buf[4:]
+	i := bytes.IndexByte(rest, 0)
+	if i < 0 {
+		return string(rest), nil
+	}
+	exe, rest = string(rest[:i]), rest[i:]
+	for len(rest) > 0 && rest[0] == 0 {
+		rest = rest[1:]
+	}
+	for n := 0; n < argc && n < 4096 && len(rest) > 0; n++ {
+		j := bytes.IndexByte(rest, 0)
+		if j < 0 {
+			args = append(args, string(rest))
+			break
+		}
+		args = append(args, string(rest[:j]))
+		rest = rest[j+1:]
+	}
+	return exe, args
 }
 
 // OrphanRule: macOS reparents orphans to launchd (pid 1).

@@ -1,6 +1,7 @@
 package netrate
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -72,8 +73,8 @@ func TestDetectorNewAppOncePerProcessAndFirstName(t *testing.T) {
 	boot := Key{"Safari", 1}
 	initial := snap(0, map[Key]Counter{boot: {}})
 	// Two different executables share the (truncated) name "zoom".
-	paths := map[Key]string{{"zoom", 3}: "/apps/zoom", {"zoom", 4}: "/opt/other/zoom"}
-	d := NewDetector(initial, func(k Key) string { return paths[k] })
+	paths := map[int]string{3: "/apps/zoom", 4: "/opt/other/zoom"}
+	d := NewDetector(initial, Identify{Exe: func(pid int) string { return paths[pid] }})
 
 	slow, fast, fast2 := Key{"slow", 2}, Key{"zoom", 3}, Key{"zoom", 4}
 	cur := snap(10*time.Second, map[Key]Counter{
@@ -104,7 +105,7 @@ func TestDetectorNewAppOncePerProcessAndFirstName(t *testing.T) {
 }
 
 func TestDetectorConnectionsWhenNoBytes(t *testing.T) {
-	d := NewDetector(Snapshot{At: t0, Procs: map[Key]Counter{}}, nil)
+	d := NewDetector(Snapshot{At: t0, Procs: map[Key]Counter{}}, Identify{})
 	k := Key{"node.exe", 9}
 	cur := Snapshot{At: t0.Add(10 * time.Second), Procs: map[Key]Counter{k: {Conns: 2}}}
 	got := d.Observe(cur, Compute(Snapshot{At: t0}, cur), 50)
@@ -115,7 +116,7 @@ func TestDetectorConnectionsWhenNoBytes(t *testing.T) {
 
 func TestDetectorForgetsLongGoneProcesses(t *testing.T) {
 	k := Key{"a", 1}
-	d := NewDetector(snap(0, map[Key]Counter{k: {}}), nil)
+	d := NewDetector(snap(0, map[Key]Counter{k: {}}), Identify{})
 	empty := snap(0, map[Key]Counter{})
 	for i := 0; i <= forgetAfter; i++ {
 		d.Observe(empty, Rates{}, 50)
@@ -127,13 +128,13 @@ func TestDetectorForgetsLongGoneProcesses(t *testing.T) {
 
 // A tool that runs over and over gets a new PID each time; it is one app.
 func TestDetectorReportsAnExecutableOnceAcrossPIDs(t *testing.T) {
-	exe := func(k Key) string {
-		if k.Name == "git" {
+	exe := func(pid int) string {
+		if pid > 1000 {
 			return "/usr/bin/git"
 		}
 		return ""
 	}
-	d := NewDetector(snap(0, map[Key]Counter{}), exe)
+	d := NewDetector(snap(0, map[Key]Counter{}), Identify{Exe: exe})
 	prev := snap(0, map[Key]Counter{})
 	events := 0
 	for i := 1; i <= 20; i++ {
@@ -149,7 +150,7 @@ func TestDetectorReportsAnExecutableOnceAcrossPIDs(t *testing.T) {
 
 // Without a readable path, apps are told apart by name.
 func TestDetectorFallsBackToNameWithoutPath(t *testing.T) {
-	d := NewDetector(snap(0, map[Key]Counter{}), func(Key) string { return "" })
+	d := NewDetector(snap(0, map[Key]Counter{}), Identify{Exe: func(int) string { return "" }})
 	cur := snap(10*time.Second, map[Key]Counter{{"curl", 7}: {In: 100 * 1024}, {"curl", 8}: {In: 100 * 1024}, {"ssh", 9}: {In: 100 * 1024}})
 	got := d.Observe(cur, Compute(snap(0, nil), cur), 50)
 	if len(got) != 2 {
@@ -159,8 +160,7 @@ func TestDetectorFallsBackToNameWithoutPath(t *testing.T) {
 
 // An app that has been offline longer than the forget window is new again.
 func TestDetectorReportsAppAgainAfterForgetWindow(t *testing.T) {
-	exe := func(Key) string { return "/usr/bin/rsync" }
-	d := NewDetector(snap(0, map[Key]Counter{}), exe)
+	d := NewDetector(snap(0, map[Key]Counter{}), Identify{Exe: func(int) string { return "/usr/bin/rsync" }})
 	first := snap(10*time.Second, map[Key]Counter{{"rsync", 1}: {In: 100 * 1024}})
 	if got := d.Observe(first, Compute(snap(0, nil), first), 50); len(got) != 1 {
 		t.Fatalf("first run should be reported: %+v", got)
@@ -178,16 +178,17 @@ func TestDetectorReportsAppAgainAfterForgetWindow(t *testing.T) {
 
 // Every python program shares the interpreter's path; each stays its own app.
 func TestDetectorKeepsInterpretersPerProcess(t *testing.T) {
-	exe := func(k Key) string {
-		switch k.Name {
-		case "python3":
+	exe := func(pid int) string {
+		switch pid {
+		case 1, 2:
 			return "/usr/bin/python3.12"
-		case "node.exe":
+		case 3, 4:
 			return `C:\Program Files\nodejs\node.exe`
 		}
 		return ""
 	}
-	d := NewDetector(snap(0, map[Key]Counter{{"python3", 1}: {}}), exe)
+	// No command lines (as on Windows): each interpreter process is its own app.
+	d := NewDetector(snap(0, map[Key]Counter{{"python3", 1}: {}}), Identify{Exe: exe})
 	cur := snap(10*time.Second, map[Key]Counter{
 		{"python3", 1}: {In: 1 << 20}, {"python3", 2}: {In: 100 * 1024},
 		{"node.exe", 3}: {In: 100 * 1024}, {"node.exe", 4}: {In: 100 * 1024},
@@ -201,9 +202,8 @@ func TestDetectorKeepsInterpretersPerProcess(t *testing.T) {
 
 // After a restart, the seeded processes' executables count as already online.
 func TestDetectorSeedsByExecutable(t *testing.T) {
-	exe := func(k Key) string { return "/usr/bin/" + k.Name }
 	initial := snap(0, map[Key]Counter{{"git", 1}: {}})
-	d := NewDetector(initial, exe)
+	d := NewDetector(initial, Identify{Exe: func(int) string { return "/usr/bin/git" }})
 	cur := snap(10*time.Second, map[Key]Counter{{"git", 2}: {In: 100 * 1024}})
 	if got := d.Observe(cur, Compute(initial, cur), 50); len(got) != 0 {
 		t.Fatalf("a new PID of a seeded executable is not new: %+v", got)
@@ -216,8 +216,7 @@ func TestDetectorForgetBoundary(t *testing.T) {
 		idle int
 		want int
 	}{{forgetAfter - 1, 0}, {forgetAfter, 1}} {
-		exe := func(Key) string { return "/usr/bin/rsync" }
-		d := NewDetector(snap(0, map[Key]Counter{}), exe)
+		d := NewDetector(snap(0, map[Key]Counter{}), Identify{Exe: func(int) string { return "/usr/bin/rsync" }})
 		first := snap(10*time.Second, map[Key]Counter{{"rsync", 1}: {In: 100 * 1024}})
 		d.Observe(first, Compute(snap(0, nil), first), 50)
 		empty := snap(0, map[Key]Counter{})
@@ -228,5 +227,60 @@ func TestDetectorForgetBoundary(t *testing.T) {
 		if got := d.Observe(again, Compute(snap(10*time.Second, nil), again), 50); len(got) != tc.want {
 			t.Fatalf("after %d idle samples got %d events, want %d", tc.idle, len(got), tc.want)
 		}
+	}
+}
+
+// Test workers of one runner share a script; a different script is a new app.
+func TestDetectorIdentifiesInterpreterByProgram(t *testing.T) {
+	args := map[int][]string{
+		1: {"node", "/repo/node_modules/vitest/dist/workers/forks.js"},
+		2: {"node", "--max-old-space-size=4096", "/repo/node_modules/vitest/dist/workers/forks.js"},
+		3: {"node", "/repo/server.js"},
+		4: {"python3", "-m", "http.server"},
+		5: {"python3", "-m", "http.server", "9000"},
+		6: {"node"}, // no program: stays per process
+		7: {"node"},
+	}
+	id := Identify{
+		Exe: func(pid int) string {
+			if pid >= 4 && pid <= 5 {
+				return "/usr/bin/python3.12"
+			}
+			return "/usr/bin/node"
+		},
+		Args: func(pid int) []string { return args[pid] },
+	}
+	d := NewDetector(snap(0, map[Key]Counter{}), id)
+	procs := map[Key]Counter{}
+	for pid := range args {
+		procs[Key{"node", pid}] = Counter{In: 100 * 1024}
+	}
+	cur := snap(10*time.Second, procs)
+	got := d.Observe(cur, Compute(snap(0, nil), cur), 50)
+	if len(got) != 5 {
+		t.Fatalf("want forks.js once, server.js, http.server once, and both bare nodes; got %d: %+v", len(got), got)
+	}
+}
+
+func TestProgramArg(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"node", "app.js"}, "app.js"},
+		{[]string{"node", "--inspect", "-r", "ts-node/register", "app.ts"}, "app.ts"},
+		{[]string{"python3", "-u", "-m", "pip", "install"}, "-m pip"},
+		{[]string{"java", "-cp", "a.jar", "Main"}, "Main"},
+		{[]string{"java", "-jar", "app.jar"}, "-jar app.jar"},
+		{[]string{"bash", "-c", "sleep 1"}, "-c sleep 1"},
+		{[]string{"node"}, ""},
+		{nil, ""},
+	} {
+		if got := programArg(tc.args); got != tc.want {
+			t.Errorf("programArg(%q) = %q, want %q", tc.args, got, tc.want)
+		}
+	}
+	if got := programArg([]string{"sh", "-c", strings.Repeat("x", 1000)}); len(got) != maxProgram {
+		t.Errorf("long program not truncated: %d bytes", len(got))
 	}
 }

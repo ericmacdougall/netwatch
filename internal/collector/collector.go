@@ -35,6 +35,9 @@ type Collector interface {
 	// read (another user's process, or one that has exited). It is used
 	// only in memory, to tell apps apart.
 	ExePath(pid int) string
+	// Args returns a process's command line, or nil when it cannot be
+	// read. It is used only in memory, to tell interpreter programs apart.
+	Args(pid int) []string
 	// OrphanRule is this platform's definition of "lost its parent".
 	OrphanRule() procscan.OrphanRule
 	// Terminate asks a verified process to exit. Unix sends SIGTERM only.

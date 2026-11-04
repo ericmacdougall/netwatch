@@ -434,6 +434,10 @@ func (c *Collector) ExePath(pid int) string {
 	return windows.UTF16ToString(buf[:n])
 }
 
+// Args is not read on Windows (it needs another process's PEB), so
+// interpreters there stay one app per process.
+func (c *Collector) Args(int) []string { return nil }
+
 // OrphanRule: Windows never reparents; see procscan.MissingParent.
 func (c *Collector) OrphanRule() procscan.OrphanRule { return procscan.MissingParent }
 

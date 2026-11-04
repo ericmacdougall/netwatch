@@ -100,3 +100,28 @@ func sameFile(t *testing.T, a, b string) bool {
 	sb, errB := os.Stat(b)
 	return errA == nil && errB == nil && os.SameFile(sa, sb)
 }
+
+func TestArgsOfSelf(t *testing.T) {
+	got := New().Args(os.Getpid())
+	if len(got) != len(os.Args) || (len(got) > 1 && got[1] != os.Args[1]) {
+		t.Fatalf("Args(self) = %q, want %q", got, os.Args)
+	}
+	if New().Args(1<<30) != nil {
+		t.Fatal("Args of a missing PID should be nil")
+	}
+}
+
+func TestParseProcArgs(t *testing.T) {
+	buf := []byte{2, 0, 0, 0}
+	buf = append(buf, "/usr/local/bin/node\x00\x00\x00\x00node\x00app.js\x00PATH=/bin\x00"...)
+	exe, args := parseProcArgs(buf)
+	if exe != "/usr/local/bin/node" || len(args) != 2 || args[0] != "node" || args[1] != "app.js" {
+		t.Fatalf("got %q %q", exe, args)
+	}
+	if exe, args := parseProcArgs([]byte{1, 0}); exe != "" || args != nil {
+		t.Fatalf("short buffer: %q %q", exe, args)
+	}
+	if exe, args := parseProcArgs(append([]byte{9, 0, 0, 0}, "/bin/x\x00a"...)); exe != "/bin/x" || len(args) != 1 || args[0] != "a" {
+		t.Fatalf("truncated buffer: %q %q", exe, args)
+	}
+}

@@ -121,10 +121,14 @@ const forgetAfter = 360
 // maxNames caps the sets of remembered process names and app identities.
 const maxNames = 10000
 
-// Identify returns a stable identity for a process, normally its
-// executable path, or "" when it cannot be read (another user's process,
-// or one that has already exited).
-type Identify func(Key) string
+// Identify looks up what a process is running. Exe returns its executable
+// path and Args its command line; either returns empty when it cannot be
+// read (another user's process, or one that has already exited). Either
+// may be nil.
+type Identify struct {
+	Exe  func(pid int) string
+	Args func(pid int) []string
+}
 
 type entry struct {
 	tick int    // last sample index the process was present
@@ -145,8 +149,8 @@ type Detector struct {
 }
 
 // NewDetector seeds the detector with processes already running at
-// startup so they are not reported as new. identify may be nil, in which
-// case apps are told apart by name only.
+// startup so they are not reported as new. With an empty identify, apps
+// are told apart by name only.
 func NewDetector(initial Snapshot, identify Identify) *Detector {
 	d := &Detector{known: map[Key]entry{}, ids: map[string]int{}, names: map[string]bool{}, identify: identify}
 	for k := range initial.Procs {
@@ -160,19 +164,65 @@ func NewDetector(initial Snapshot, identify Identify) *Detector {
 
 func (d *Detector) idOf(k Key) string {
 	p := ""
-	if d.identify != nil {
-		p = d.identify(k)
+	if d.identify.Exe != nil {
+		p = d.identify.Exe(k.PID)
 	}
 	// An interpreter's path names the runtime, not the program it runs, so
-	// every python or node program would look like one app. Keep those
-	// per process, as before.
+	// every python or node program would look like one app. Identify those
+	// by the script they run, or keep them per process when it is unknown.
 	if isInterpreter(p) || (p == "" && isInterpreter(k.Name)) {
+		if d.identify.Args != nil {
+			if prog := programArg(d.identify.Args(k.PID)); prog != "" {
+				return "run:" + interpreterOf(p, k.Name) + "|" + prog
+			}
+		}
 		return "pid:" + k.Name + "/" + strconv.Itoa(k.PID)
 	}
 	if p != "" {
 		return "exe:" + p
 	}
 	return "name:" + k.Name
+}
+
+// maxProgram bounds the remembered program text (a -c script can be long).
+const maxProgram = 256
+
+// programArg returns what an interpreter command line runs: the first
+// argument after the interpreter that is not an option, or the module or
+// jar named by -m or -jar. Values of a few common options are skipped.
+func programArg(args []string) string {
+	for i := 1; i < len(args); i++ {
+		a := args[i]
+		switch a {
+		case "-m", "-jar", "-c", "-e", "--eval", "-Command", "-File":
+			if i+1 < len(args) {
+				return truncate(a + " " + args[i+1])
+			}
+			return ""
+		case "-cp", "-classpath", "--class-path", "-r", "--require", "--import", "--loader", "-W", "-X":
+			i++
+			continue
+		}
+		if strings.HasPrefix(a, "-") {
+			continue
+		}
+		return truncate(a)
+	}
+	return ""
+}
+
+func truncate(s string) string {
+	if len(s) > maxProgram {
+		return s[:maxProgram]
+	}
+	return s
+}
+
+func interpreterOf(exe, name string) string {
+	if exe != "" {
+		name = exe
+	}
+	return strings.ToLower(path.Base(strings.ReplaceAll(name, "\\", "/")))
 }
 
 // interpreters are runtimes whose executable says nothing about the program.

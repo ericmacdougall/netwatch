@@ -188,6 +188,15 @@ func (c *Collector) ExePath(pid int) string {
 	return strings.TrimSuffix(p, " (deleted)")
 }
 
+// Args reads /proc/<pid>/cmdline.
+func (c *Collector) Args(pid int) []string {
+	b, err := os.ReadFile(filepath.Join(c.proc, strconv.Itoa(pid), "cmdline"))
+	if err != nil || len(b) == 0 {
+		return nil
+	}
+	return strings.Split(strings.TrimRight(string(b), "\x00"), "\x00")
+}
+
 // OrphanRule: reparented to init or to a user-session subreaper.
 func (c *Collector) OrphanRule() procscan.OrphanRule { return procscan.InitOrSubreaper("systemd") }
 

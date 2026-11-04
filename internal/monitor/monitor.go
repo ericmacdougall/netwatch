@@ -88,7 +88,7 @@ func Run(ctx context.Context, d Deps, once bool) error {
 	if err == nil {
 		s.prev, s.havePrev = snap, true
 		// Processes already online at startup are not "new".
-		s.det = netrate.NewDetector(snap, s.exeOf)
+		s.det = netrate.NewDetector(snap, s.identity())
 	}
 	s.emit(record.Event{Event: record.Start, Version: d.Version, OS: runtime.GOOS + "/" + runtime.GOARCH,
 		KnownProcs: record.Ptr(len(snap.Procs))})
@@ -186,7 +186,7 @@ func (s *state) cycle(ctx context.Context, once bool) {
 	if err == nil && s.det == nil {
 		// The first reading failed (e.g. a helper timed out at startup):
 		// seed from it so a restart does not report every app as new.
-		s.det = netrate.NewDetector(cur, s.exeOf)
+		s.det = netrate.NewDetector(cur, s.identity())
 	} else if err == nil {
 		for _, a := range s.det.Observe(cur, rates, cfg.NewAppMinKbps) {
 			ev := record.Event{Event: record.NewNetApp, Proc: a.Name, PID: record.FlexInt(a.PID),
@@ -301,9 +301,12 @@ func pingText(p *health.Ping) string {
 	return fmt.Sprintf("%gms loss %g%%", *p.Avg, p.Loss)
 }
 
-// exeOf identifies a network process by executable, so repeated runs of one
-// tool are one app. The path stays in memory and never reaches the logs.
-func (s *state) exeOf(k netrate.Key) string { return s.d.Col.ExePath(k.PID) }
+// identity tells apps apart by executable (and an interpreter's program),
+// so repeated runs of one tool are one app. Paths and command lines stay in
+// memory and never reach the logs.
+func (s *state) identity() netrate.Identify {
+	return netrate.Identify{Exe: s.d.Col.ExePath, Args: s.d.Col.Args}
+}
 
 func (s *state) ts() string { return s.d.Now().Format(eventlog.TimeFormat) }
 
