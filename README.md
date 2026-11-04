@@ -1,0 +1,247 @@
+# netwatch
+
+netwatch is a small background monitor for developer machines. It answers two questions:
+
+1. **Why is the network bad right now?** Every 10 seconds it pings the gateway and an internet host and records per-process traffic. When latency or loss gets bad it logs a `DEGRADED` event with the top talkers at that moment, so you can see what was saturating the link. It also notes each app that starts moving real traffic for the first time (`NEW_NET_APP`).
+2. **What is still running that should not be?** Every minute it looks for developer processes that were left behind: `node`, `vite`, `esbuild`, `wrangler`/`workerd`, Chrome helpers and headless Chrome, `chromedriver`, Playwright, Puppeteer, Electron, `Xvfb`, `crashpad_handler`, `rclone` and similar. A process is reported as an `ORPHAN` when it has lost the parent that started it and is older than a minimum age. It is reported as a `RUNAWAY` when it stays hot on CPU for several scans or passes a memory ceiling.
+
+netwatch never kills anything on its own. `netwatch orphans --kill` is opt-in, re-checks every process just before signalling it, and on macOS and Linux only sends `SIGTERM`.
+
+It runs on macOS, Linux and Windows as a single static binary with one dependency, [`golang.org/x/sys`](https://pkg.go.dev/golang.org/x/sys) (BSD-3-Clause, from the Go project). It uses about 0.1–0.3% of one CPU core and 10–20 MB of memory; see [Resource use](#resource-use).
+
+## Install
+
+Download the archive for your platform from the [releases page](https://github.com/ericmacdougall/netwatch/releases). Check it against `SHA256SUMS`, put `netwatch` somewhere on your `PATH`, then register the background service:
+
+```sh
+netwatch install     # per-user service; no root or administrator rights needed
+netwatch status      # service state and log freshness
+netwatch uninstall   # remove the service
+```
+
+Or build from source with Go 1.26 or newer:
+
+```sh
+go install github.com/ericmacdougall/netwatch/cmd/netwatch@latest
+```
+
+`install` registers the binary at its current path. If you move or upgrade the binary, run `netwatch install` again.
+
+### macOS
+
+```sh
+curl -LO https://github.com/ericmacdougall/netwatch/releases/download/v0.1.0/netwatch_v0.1.0_darwin_arm64.tar.gz
+curl -LO https://github.com/ericmacdougall/netwatch/releases/download/v0.1.0/SHA256SUMS
+shasum -a 256 -c SHA256SUMS --ignore-missing
+tar xzf netwatch_v0.1.0_darwin_arm64.tar.gz
+install -m 755 netwatch_v0.1.0_darwin_arm64/netwatch ~/.local/bin/netwatch
+~/.local/bin/netwatch install
+```
+
+`install` writes the LaunchAgent `~/Library/LaunchAgents/com.ericmacdougall.netwatch.plist` and loads it with `launchctl bootstrap`. It replaces any agent with the same label. Logs go to `~/Library/Logs/netwatch/`. If the binary was downloaded with a browser, clear the quarantine flag first with `xattr -d com.apple.quarantine netwatch`.
+
+### Linux
+
+```sh
+tar xzf netwatch_v0.1.0_linux_amd64.tar.gz
+install -m 755 netwatch_v0.1.0_linux_amd64/netwatch ~/.local/bin/netwatch
+~/.local/bin/netwatch install
+```
+
+`install` writes the systemd user unit `~/.config/systemd/user/netwatch.service`, then enables and starts it. A user unit runs only while you are logged in unless lingering is enabled (`loginctl enable-linger $USER`, which may need an administrator). Logs go to `$XDG_STATE_HOME/netwatch/`, by default `~/.local/state/netwatch/`.
+
+### Windows
+
+```powershell
+Expand-Archive netwatch_v0.1.0_windows_amd64.zip -DestinationPath $env:LOCALAPPDATA\netwatch
+& "$env:LOCALAPPDATA\netwatch\netwatch_v0.1.0_windows_amd64\netwatch.exe" install
+```
+
+`install` creates a per-user Scheduled Task named `netwatch` that starts at logon with your normal, non-elevated rights, and starts it immediately. If local policy forbids a standard user from creating logon tasks, netwatch falls back to a `HKCU\...\CurrentVersion\Run` entry. Logs go to `%LOCALAPPDATA%\netwatch\logs\`.
+
+## Usage
+
+```text
+netwatch [--config FILE] [--log-dir DIR] <command>
+
+  run                       sample forever (what the service runs)
+  once                      one sample and one process scan, then exit
+  report [--since 2h] [--json]
+  orphans [--kill] [--force] [--json]
+  tail [-n N] [--no-follow]
+  install | uninstall | status [--label NAME]
+  config                    print the effective configuration
+  version
+```
+
+Run `netwatch orphans` to see which watched processes are orphaned. Add `--kill` to ask them to exit. On Windows, which has no `SIGTERM`, `--kill` asks politely through `taskkill`. Console programs such as `node` ignore that request, so `--kill --force` is needed, which calls `TerminateProcess`. `--json` prints machine-readable output for scripts and agents:
+
+```json
+{
+  "orphans": [
+    {"pid": 7311, "ppid": 1, "age_s": 8640, "cpu": 0.1, "rss_mb": 96,
+     "name": "node", "cmd": "node /Users/me/src/app/node_modules/.bin/vite --port 5173"}
+  ],
+  "results": [{"pid": 7311, "result": "signalled"}]
+}
+```
+
+`results` appears only with `--kill`. A process that changed between the listing and the signal, for example because its PID was reused, is reported as `skipped: ...` and left alone.
+
+### Example report
+
+```text
+$ netwatch report --since 2h
+netwatch report, last 2h: 119 samples, 5 events
+  gateway ms: median 3.9  p95 4.7  max 62  avg loss 0.7%
+  avg traffic: in 161 kB/s, out 181 kB/s
+  netwatch itself: cpu avg 0.30% (max 0.3%), rss max 14 MB
+  top talkers (avg kB/s in / out while in the top list):
+    rsync                                        2 /     161
+    Safari                                     134 /      12
+    node                                        25 /       8
+  2026-11-03T21:02:31-07:00 NEW_NET_APP  rsync (4410) 1↓/1900↑ kB/s
+  2026-11-03T21:05:31-07:00 DEGRADED     gw=62ms/111.6ms max, 20% loss net=120ms/216ms max, 0% loss top=rsync(2400↑), Safari(12↑)
+  2026-11-03T21:09:31-07:00 RECOVERED    gw=3.4ms/6.1ms max, 0% loss net=14.2ms/25.6ms max, 0% loss
+  2026-11-03T21:44:31-07:00 ORPHAN       pid 7311 cpu 0.1 rss 96MB node /Users/me/src/app/node_modules/.bin/vite --port 5173
+  2026-11-03T22:13:31-07:00 RUNAWAY      [cpu] pid 9055 cpu 101.2 rss 410MB /Users/me/Library/Caches/ms-playwright/chromium-1200/chrome-mac/headless_shell --headless …
+```
+
+In this example, a backup upload (`rsync`) saturated the uplink. Gateway latency went from about 4 ms to 62 ms with 20% loss, and `DEGRADED` named `rsync` as the top talker. `report --json` prints the same summary as a JSON object with `gateway`, `top_talkers`, `counts` and `events` fields.
+
+## Events
+
+Events are appended to `events.jsonl` and echoed to stdout. Samples go to `samples.jsonl`.
+
+| Event | Meaning |
+| --- | --- |
+| `START` / `STOP` | monitor started or stopped cleanly |
+| `NEW_NET_APP` | a process moved at least `new_app_min_kbps` for the first time (on Windows: opened its first external TCP connection). `first_seen_name` is true the first time that program name is seen; only then is a notification shown |
+| `DEGRADED` | gateway average RTT above `degraded_gw_ms`, gateway loss at or above `degraded_loss_pct`, no gateway replies, or internet loss at or above `degraded_loss_pct`. Includes the interface, both pings, total traffic and the top talkers |
+| `RECOVERED` | health is back to normal |
+| `ORPHAN` | a watched process lost its parent (see below) and is older than `orphan_min_age_min` |
+| `RUNAWAY` | a watched process was at or above `runaway_cpu_pct` for `runaway_scans` consecutive scans (`reason: cpu`), or at or above `runaway_rss_mb` (`reason: rss`). Reported once per reason until it cools down or exits |
+| `ORPHANS_KILLED` | `orphans --kill` ran. `pids` lists the signalled processes and `results` gives each outcome |
+
+All rates are kilobytes per second (`kB/s`). Every sample also has a `self` field with netwatch's own CPU percentage, which includes the helper commands it runs, and its memory use.
+
+What "lost its parent" means depends on the platform:
+
+- **macOS:** the process was reparented to `launchd` (PID 1).
+- **Linux:** the process was reparented to PID 1, or to a `systemd --user` session manager, which adopts orphans of a login session.
+- **Windows:** Windows never reparents. A process counts as orphaned when its recorded parent PID no longer exists, or when that PID now belongs to a process that started after it. Windows reuses PIDs quickly, so a process like that cannot be the original parent.
+
+Only processes owned by the user running netwatch are considered orphans.
+
+## Configuration
+
+netwatch reads a JSON file from the first of these that is set:
+
+1. `--config FILE`
+2. `NETWATCH_CONFIG`
+3. the default path: `~/Library/Application Support/netwatch/config.json` on macOS, `~/.config/netwatch/config.json` on Linux, or `%APPDATA%\netwatch\config.json` on Windows
+
+The file only needs the keys you change. A missing file means all defaults. Unknown keys, invalid regular expressions and out-of-range values produce warnings and fall back to the defaults. A file that is not valid JSON is reported and ignored. `netwatch config` prints the effective configuration.
+
+```json
+{
+  "interval": 10,
+  "orphan_every": 60,
+  "internet_host": "1.1.1.1",
+  "degraded_gw_ms": 40,
+  "degraded_loss_pct": 10,
+  "new_app_min_kbps": 50,
+  "top_n": 6,
+  "orphan_min_age_min": 30,
+  "runaway_cpu_pct": 80,
+  "runaway_scans": 3,
+  "runaway_rss_mb": 3000,
+  "notify": true,
+  "notify_cooldown_s": 600,
+  "max_log_mb": 20,
+  "watch_patterns_extra": ["(^|/)my-dev-daemon( |$)"],
+  "orphan_ignore_extra": ["/opt/my-app/helper"]
+}
+```
+
+- `watch_patterns` and `orphan_ignore` are regular expressions ([RE2 syntax](https://github.com/google/re2/wiki/Syntax)) matched against the full command line. On Windows, the program path is matched with forward slashes and without `.exe`, so `(^|/)node( |$)` matches `C:/Program Files/nodejs/node`.
+- Setting either list replaces the built-in defaults. Use `watch_patterns_extra` and `orphan_ignore_extra` to add patterns instead.
+- `--log-dir DIR` or `NETWATCH_LOG_DIR` changes where logs go.
+- `netwatch install` records `--config` and `--log-dir` in the service definition when you pass them, or when the matching environment variables are set.
+
+Each log file is rotated to `<name>.1` when it passes `max_log_mb`, and only one old generation is kept.
+
+## Privacy
+
+- **Everything stays on your machine.** netwatch has no telemetry and makes no network connections except the ICMP pings to your gateway and to `internet_host`.
+- **Logs contain process names, PIDs and command lines.** Logs are created readable only by your user (mode `0600` in a `0700` directory on macOS and Linux) and are never sent anywhere.
+- **Secrets in command lines are masked as `[REDACTED]`.** This covers command lines in logs, terminal output, `--json` output and notifications. netwatch recognises common shapes: `--token=…`, `--password …`, `--api-key …` and similar options; `NAME_TOKEN=…`-style assignments and `?password=…` query parameters; `Authorization:` and `Bearer` headers; credentials in URLs; and well-known token formats such as GitHub, Slack, AWS, OpenAI-style and JWT tokens.
+- **Masking is best effort.** A secret passed as a bare positional argument cannot be recognised. Treat the logs as you would your shell history.
+- **Notifications go to the local notification system:** `osascript` on macOS, `notify-send` on Linux, or a PowerShell toast on Windows. Their text is passed as data, never as script.
+
+## Limitations by platform
+
+### macOS
+
+- Per-process bytes come from `nettop`, which runs continuously in logging mode, so one `nettop` process lives alongside netwatch. `nettop` truncates process names to about 15 characters, and that is the name `NEW_NET_APP` and the talkers list show.
+- With many open network flows, `nettop` can take up to about 30 seconds to start. Samples taken in that time have no traffic data, and netwatch learns which apps are already online from the first data it receives.
+- Processes are read with `ps`. `ps` CPU is a decaying average, not an exact per-interval figure.
+- Only IPv4 default routes are used to find the gateway.
+
+### Linux
+
+- Per-process traffic comes from `ss -tinp`. It covers TCP only: UDP, including QUIC/HTTP3, is not counted.
+- Without root, `ss` shows the owning process only for your own sockets, so other users' traffic is invisible.
+- Bytes moved by a connection that opened and closed between two samples are missed.
+- Interface totals from `/proc/net/dev` are recorded as `if_in_kBps` and `if_out_kBps`.
+- `ping` must work without root. Most distributions give it a file capability, or allow it through `net.ipv4.ping_group_range`.
+- `notify-send` is used only when a desktop session is present. Otherwise notifications are skipped.
+- The session subreaper is recognised by its process name, `systemd`. Other subreapers are not detected.
+
+### Windows
+
+- Windows only gives per-connection byte counters to administrators (`SetPerTcpConnectionEStats`). netwatch runs without admin, so it records each process's count of established, non-loopback TCP connections, plus byte totals for the default-route interface.
+  - "Top talkers" on Windows means the processes with the most connections.
+  - `NEW_NET_APP` fires when a process opens its first external TCP connection.
+  - Sample `in_kBps` and `out_kBps` are the interface totals.
+- Processes that cannot be opened, such as other users' or protected processes, have no command line, start time or memory figure. They are never reported as orphans.
+- `--kill` without `--force` uses `taskkill`, which only closes windowed programs. Console programs need `--force`, which calls `TerminateProcess` and gives them no chance to clean up.
+- Notifications use a PowerShell toast, which briefly starts `powershell.exe`, at most once per cooldown.
+- Only IPv4 default routes are used.
+
+## Resource use
+
+netwatch runs with lowered CPU and I/O priority, and its `self` field in each sample records what it costs. On an Apple-silicon laptop over 30 minutes with default settings, netwatch plus its helpers averaged about 0.2% of one core, and netwatch's resident memory stayed under 20 MB. Run `netwatch report --since 1h` to see the figures for your machine.
+
+## Development
+
+```sh
+go test ./...                              # unit tests plus collector tests for this OS
+go vet ./... && staticcheck ./...
+GOOS=windows go vet ./... && GOOS=linux go vet ./...
+scripts/build-release.sh v0.0.0-dev dist   # cross-build all release archives
+```
+
+Tests for the classification logic, rate deltas, the degraded/recovered state machine, parsers, configuration, log rotation and redaction run on every OS. Collector tests that read the live system (`*_darwin_test.go`, `*_linux_test.go`, `*_windows_test.go`) run only on their platform. CI runs all of them on macOS, Linux and Windows.
+
+### Changes from the Python prototype
+
+netwatch began as a single Python script for macOS. The Go version keeps its event names, CLI and configuration keys, with these deliberate changes:
+
+- **Timestamps** are RFC 3339 with a UTC offset. Old offset-less logs are still read as local time.
+- **`pid`** is always a number.
+- **Talker field names:** talker entries use `in_kBps` and `out_kBps`. The old `in_kbps` and `out_kbps` names were kB/s despite their names, and are still read from old logs.
+- **Orphan ownership:** only processes owned by the current user can be orphans. Others could not be signalled anyway.
+- **Kill re-check:** `orphans --kill` re-reads the process table and checks each process's start time and command line before signalling it.
+- **Redaction:** secrets in command lines are redacted everywhere.
+- **Service output:** the service no longer writes every event to `stdout.log`. Only errors go to `stderr.log` or the journal, and repeated errors are logged at most once an hour.
+- **Single instance:** a lock file stops two monitors from writing to the same log directory.
+- **`STOP` event:** a clean shutdown writes `STOP`.
+- **Config location:** the default config path moved to the platform config directory.
+- **New config keys:** `watch_patterns_extra` and `orphan_ignore_extra` were added.
+- **`report --since`:** an invalid value is now an error instead of silently meaning one hour, and the window also accepts `s` (seconds).
+- **New flags:** `report --json`, `orphans --json`, `orphans --force` (Windows) and `tail -n` / `--no-follow` were added. The new commands are `install`, `uninstall`, `status`, `config` and `version`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
