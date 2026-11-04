@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ericmacdougall/netwatch/internal/attrib"
+	"github.com/ericmacdougall/netwatch/internal/guard"
 	"github.com/ericmacdougall/netwatch/internal/incident"
 	"github.com/ericmacdougall/netwatch/internal/resources"
 	"github.com/ericmacdougall/netwatch/internal/sampler"
@@ -145,5 +146,30 @@ func TestRelCwd(t *testing.T) {
 		if got := relCwd(c.cwd, c.root, c.home); got != c.want {
 			t.Errorf("relCwd(%q,%q,%q)=%q want %q", c.cwd, c.root, c.home, got, c.want)
 		}
+	}
+}
+
+// Growth alerts from guard groups carry the job, app and agent, and the
+// classifier names a process's app and agent.
+func TestAlertSeriesAndWhoNameTheJob(t *testing.T) {
+	g := &guard.Group{PGID: 200, Cmd: "python3 job.py", Agent: "agent:abc"}
+	ss := alertSeries([]guard.Term{{Key: "pg:200:1", Group: g}, {Key: "inel:Google Chrome"}, {Key: "unattributed"}})
+	if len(ss) != 2 {
+		t.Fatalf("series: %+v", ss)
+	}
+	for _, s := range ss {
+		if s.Key == "pg:200:1" && (s.Name != "python3 job.py" || s.App != ClaudeOwner || s.Agent != "agent:abc") {
+			t.Fatalf("group series: %+v", s)
+		}
+	}
+	const claudeExe = "/home/u/.local/share/claude/versions/2.1.318"
+	scan := []resources.Proc{
+		{PID: 100, PPID: 1, PGID: 100, Exe: claudeExe, Name: "2.1.318"},
+		{PID: 201, PPID: 100, PGID: 200, Exe: "/usr/bin/python3", Name: "python3"},
+	}
+	e := &Elig{resolver: attrib.NewResolver(16)}
+	who := e.whoFunc(scan, map[int]groupLabel{200: {label: attrib.Label{Agent: "agent:abc", Confidence: 0.9}}})
+	if app, agent := who(scan[1]); app != ClaudeOwner || agent != "agent:abc" {
+		t.Fatalf("who: %q %q", app, agent)
 	}
 }

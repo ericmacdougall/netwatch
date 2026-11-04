@@ -212,3 +212,45 @@ func TestCountChromeHelpers(t *testing.T) {
 		t.Fatalf("helpers %d, want 3", n)
 	}
 }
+
+// Alerts name the process or job, its owner app and the agent, never the
+// internal group key (the AC-3 live run showed "pg:61859:1793...").
+func TestAlertsNameAppAndAgent(t *testing.T) {
+	e := New(Config{}, nil, nil)
+	s := growing("pg:61859:1793822848342331000", 5<<30, time.Minute)
+	s.Name, s.App, s.Agent = "python3 job.py", "Claude Code", "agent:abc"
+	p := resources.Proc{PID: 61999, PGID: 61859, Name: "Python", Footprint: 9 << 30, FootprintOK: true}
+	who := func(q resources.Proc) (string, string) {
+		if q.PID == 61999 {
+			return "Claude Code", "agent:abc"
+		}
+		return "", ""
+	}
+	as := e.Evaluate(Input{Series: []Series{s}, Procs: []resources.Proc{p}, Who: who})
+	var growth, proc string
+	for _, a := range as {
+		switch a.Trigger {
+		case TrigGrowth:
+			growth = a.Message
+			if a.Subject != s.Key {
+				t.Errorf("rate-limit subject changed: %q", a.Subject)
+			}
+		case TrigProcess:
+			proc = a.Message
+		}
+	}
+	for name, m := range map[string]string{"growth": growth, "process": proc} {
+		if strings.Contains(m, "pg:") || !strings.Contains(m, "app Claude Code") || !strings.Contains(m, "agent agent:abc") {
+			t.Errorf("%s alert: %q", name, m)
+		}
+	}
+	if !strings.HasPrefix(growth, "python3 job.py (pgid 61859, ") {
+		t.Errorf("growth alert lacks the job: %q", growth)
+	}
+	// An aggregate keeps its readable key; nothing unknown is invented.
+	agg := growing("inel:Google Chrome", 5<<30, time.Minute)
+	as = e.Evaluate(Input{Series: []Series{agg}})
+	if len(as) != 1 || as[0].Message != "Google Chrome is growing 5.0 GB/min (now 6.0 GB)" {
+		t.Errorf("aggregate alert: %+v", as)
+	}
+}

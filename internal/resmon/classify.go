@@ -74,7 +74,7 @@ func (e *Elig) Classify(scan []resources.Proc, recs []watcher.Record, budgets ma
 		}
 	}
 	return Classification{Groups: out.Groups, OwnerOf: out.OwnerOf, Excluded: out.Excluded, Claude: claude,
-		Annotate: e.annotator(scan, labels)}
+		Annotate: e.annotator(scan, labels), Who: e.whoFunc(scan, labels)}
 }
 
 // allowlist is the configured versions plus every running version the
@@ -182,6 +182,27 @@ func sessionOK(s string) bool {
 		}
 	}
 	return true
+}
+
+// whoFunc gives a process's owner app and its group's agent label, for
+// alert messages. The pid table is built on first use (alerts are rare).
+func (e *Elig) whoFunc(scan []resources.Proc, labels map[int]groupLabel) func(resources.Proc) (string, string) {
+	res := e.resolver
+	var tbl map[int]resources.Proc
+	return func(p resources.Proc) (string, string) {
+		if tbl == nil {
+			tbl = make(map[int]resources.Proc, len(scan))
+			for _, q := range scan {
+				tbl[q.PID] = q
+			}
+		}
+		in := res.Classify(p, tbl)
+		app := in.Owner
+		if in.ClaudePID != 0 {
+			app = ClaudeOwner
+		}
+		return app, labels[p.PGID].label.Agent
+	}
 }
 
 // annotator fills sample rows from this scan: owner app and agent root

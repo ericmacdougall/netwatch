@@ -62,8 +62,53 @@ type Point struct {
 // ineligible owner aggregate). "unattributed" must not be passed: it has no
 // owner to warn about.
 type Series struct {
-	Key    string
+	Key    string  // identity for rate limiting ("pg:..", "inel:<app>", ..)
 	Points []Point // oldest first
+	// Display: the job's short redacted command, its owner app and the
+	// agent label. Empty fields are left out of the message.
+	Name, App, Agent string
+}
+
+// label is how a series is named in a message: the job with its pgid, app
+// and agent, or an aggregate's readable key, never "pg:<pgid>:<ns>".
+func (s Series) label() string {
+	pgid := ""
+	if strings.HasPrefix(s.Key, "pg:") {
+		if f := strings.SplitN(s.Key, ":", 3); len(f) == 3 {
+			pgid = f[1]
+		}
+	}
+	name := s.Name
+	if name == "" {
+		switch {
+		case pgid != "":
+			name = "job"
+		case strings.HasPrefix(s.Key, "inel:"):
+			name = strings.TrimPrefix(s.Key, "inel:")
+		default:
+			name = s.Key
+		}
+	}
+	var parts []string
+	if pgid != "" {
+		parts = append(parts, "pgid "+pgid)
+	}
+	parts = append(parts, who(s.App, s.Agent)...)
+	if len(parts) == 0 {
+		return name
+	}
+	return name + " (" + strings.Join(parts, ", ") + ")"
+}
+
+func who(app, agent string) []string {
+	var parts []string
+	if app != "" {
+		parts = append(parts, "app "+app)
+	}
+	if agent != "" {
+		parts = append(parts, "agent "+agent)
+	}
+	return parts
 }
 
 // Input is everything one evaluation sees.
@@ -72,6 +117,8 @@ type Input struct {
 	Sys    resources.System
 	Procs  []resources.Proc // the last full scan
 	Series []Series
+	// Who gives a process's owner app and agent label (optional).
+	Who func(p resources.Proc) (app, agent string)
 }
 
 // Alert is one raised alert.
@@ -121,6 +168,13 @@ func New(cfg Config, n *notify.Limiter, sink Sink) *Engine {
 	return e
 }
 
+func procWho(f func(resources.Proc) (string, string), p resources.Proc) []string {
+	if f == nil {
+		return nil
+	}
+	return who(f(p))
+}
+
 // Evaluate returns the alerts that hold for in, in a stable order, without
 // any rate limiting.
 func (e *Engine) Evaluate(in Input) []Alert {
@@ -130,7 +184,7 @@ func (e *Engine) Evaluate(in Input) []Alert {
 	for _, p := range in.Procs {
 		if p.FootprintOK && p.Footprint > e.cfg.ProcBytes {
 			out = append(out, Alert{Trigger: TrigProcess, Subject: fmt.Sprintf("pid:%d", p.PID), PID: p.PID, Footprint: p.Footprint,
-				Message: fmt.Sprintf("%s (pid %d) uses %s", p.Name, p.PID, human(p.Footprint))})
+				Message: fmt.Sprintf("%s (%s) uses %s", p.Name, strings.Join(append([]string{fmt.Sprintf("pid %d", p.PID)}, procWho(in.Who, p)...), ", "), human(p.Footprint))})
 		}
 	}
 
@@ -139,7 +193,7 @@ func (e *Engine) Evaluate(in Input) []Alert {
 		if rate, ok := growthPerMin(s.Points); ok && rate > float64(e.cfg.GrowthPerMin) {
 			last := s.Points[len(s.Points)-1].Bytes
 			out = append(out, Alert{Trigger: TrigGrowth, Subject: s.Key, Footprint: last,
-				Message: fmt.Sprintf("%s is growing %s/min (now %s)", s.Key, human(uint64(rate)), human(last))})
+				Message: fmt.Sprintf("%s is growing %s/min (now %s)", s.label(), human(uint64(rate)), human(last))})
 		}
 	}
 

@@ -20,11 +20,20 @@ func TestGuardInstallNote(t *testing.T) {
 	cfg := config.Default()
 	logDir := t.TempDir()
 	n := guardInstallNote(&cfg, logDir, "darwin")
-	for _, want := range []string{"mode pause+kill", "platform default", "netwatch guard alert", "last resort"} {
+	for _, want := range []string{"mode pause ", "platform default", "netwatch guard alert", "never kills"} {
 		if !strings.Contains(n, want) {
 			t.Errorf("darwin note lacks %q: %s", want, n)
 		}
 	}
+	// pause+kill set by hand on macOS still says it never kills.
+	cfg.GuardMode = "pause+kill"
+	if n := guardInstallNote(&cfg, logDir, "darwin"); !strings.Contains(n, "never kills (kill unavailable on macOS") || strings.Contains(n, "last resort") {
+		t.Errorf("darwin pause+kill note: %s", n)
+	}
+	if n := guardInstallNote(&cfg, logDir, "linux"); !strings.Contains(n, "last resort") {
+		t.Errorf("linux pause+kill note: %s", n)
+	}
+	cfg.GuardMode = ""
 	n = guardInstallNote(&cfg, logDir, "linux")
 	if !strings.Contains(n, "mode alert") || strings.Contains(n, "kills") {
 		t.Errorf("linux note: %s", n)

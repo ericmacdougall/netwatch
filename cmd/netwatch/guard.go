@@ -131,7 +131,7 @@ func (a *app) cmdGuard(args []string) error {
 		if len(rest) > 0 {
 			return usageError{fmt.Errorf("unexpected argument %q", rest[0])}
 		}
-		return a.guardStatus(cfg, stateDir)
+		return a.guardStatus(cfg, stateDir, runtime.GOOS, runningClaudeVersions())
 	case "verify-shape":
 		return a.verifyShape(cfg, rest)
 	case "simulate":
@@ -156,6 +156,9 @@ func (a *app) cmdGuard(args []string) error {
 		Reason: fmt.Sprintf("guard mode %s -> %s by %s", old, mode, guardLabel(label)),
 	})
 	fmt.Fprintf(a.stdout, "guard mode: %s (was %s). The daemon applies it within one poll.\n", mode, old)
+	if mode == guard.ModePauseKill && runtime.GOOS == "darwin" {
+		fmt.Fprintln(a.stdout, macKillNote+"; this mode pauses only")
+	}
 	if mode == guard.ModePause || mode == guard.ModePauseKill {
 		fmt.Fprintln(a.stdout, optOut)
 	}
@@ -180,9 +183,12 @@ func statusLine(cfg *config.Config, mode guard.Mode, src modeSource) string {
 		int(gc.Danger.P1Horizon/time.Second), gc.MaxPause, len(cfg.GuardClaudeVersions))
 }
 
-func (a *app) guardStatus(cfg *config.Config, stateDir string) error {
-	mode, src := effectiveMode(cfg, stateDir, runtime.GOOS)
+func (a *app) guardStatus(cfg *config.Config, stateDir, goos string, versions []string) error {
+	mode, src := effectiveMode(cfg, stateDir, goos)
 	fmt.Fprintln(a.stdout, statusLine(cfg, mode, src))
+	if goos == "darwin" {
+		fmt.Fprintln(a.stdout, macKillNote)
+	}
 	_, stateFile, allowDir := statePaths(a.logDir)
 	st, err := (&guard.FileStore{Path: stateFile}).Load()
 	switch {
@@ -205,11 +211,20 @@ func (a *app) guardStatus(cfg *config.Config, stateDir string) error {
 				r.PGID, r.Phase, r.PausedAt.Format(time.RFC3339), len(r.Members), r.Sticky, r.Cmd)
 		}
 	}
-	for _, v := range runningClaudeVersions() {
+	if goos == "darwin" {
+		return nil // per-version kill checks do not apply: see macKillNote
+	}
+	for _, v := range versions {
 		fmt.Fprintln(a.stdout, killAvailability(cfg, allowDir, v))
 	}
 	return nil
 }
+
+// macKillNote is why the guard never kills on macOS. Kill requires every
+// member of a job's group to show CLAUDECODE=1 in its own environment, and
+// macOS does not let other processes read the environment of system
+// binaries, which lead every tool-call job. The check is kept as is.
+const macKillNote = "kill unavailable on macOS: environment of system binaries not readable"
 
 // killAvailability says whether kill is available for a running version
 // and why not.
