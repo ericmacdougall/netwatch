@@ -30,6 +30,14 @@ type Lister interface {
 	AppendChildren(dst []int, pid int) ([]int, error)
 }
 
+// BatchLister lists several groups with one pass over the process table.
+// Linux has no per-group index, so listing eight groups one by one would
+// read every /proc entry eight times. Members of a listed group are
+// appended to out[pgid].
+type BatchLister interface {
+	GroupsMembers(pgids []int, out map[int][]int) error
+}
+
 // ExeResolver resolves one process's executable path ("" if unreadable).
 type ExeResolver interface {
 	ExePath(pid int) string
