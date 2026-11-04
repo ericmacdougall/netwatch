@@ -8,7 +8,11 @@ import (
 
 // Config holds every guard threshold. The defaults are the spec values.
 type Config struct {
-	Mode   Mode
+	Mode Mode
+	// NoKill forbids the kill stage whatever the mode. It is set on macOS,
+	// where kill eligibility cannot be verified (the environment of system
+	// binaries is not readable), so pause+kill acts as pause there.
+	NoKill bool
 	Danger danger.Config
 
 	ScanInterval time.Duration // a scan older than 2x this is stale (10s)

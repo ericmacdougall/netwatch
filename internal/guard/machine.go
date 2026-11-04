@@ -257,7 +257,7 @@ func (m *Machine) Step(s Snapshot) []Action {
 	m.updatePathA(s)
 	acts = append(acts, m.membersStep(s, v)...)
 	acts = append(acts, m.termProgress(s, v)...)
-	if pauseOK && m.cfg.Mode.canKill() {
+	if pauseOK && m.cfg.Mode.canKill() && !m.cfg.NoKill {
 		acts = append(acts, m.killStep(s, v)...)
 	}
 	m.endEpisodeIfDone(s)

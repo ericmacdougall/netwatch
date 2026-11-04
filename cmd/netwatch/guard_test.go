@@ -478,3 +478,14 @@ func TestMacIsPauseOnlyAndStatusSaysWhy(t *testing.T) {
 		t.Fatalf("linux status:\n%s", s)
 	}
 }
+
+// The daemon disables kill on macOS in every mode (code-inspection r3 F2).
+func TestDaemonGuardConfigNoKillOnMac(t *testing.T) {
+	cfg := config.Default()
+	if !daemonGuardConfig(&cfg, guard.ModePauseKill, "darwin").NoKill {
+		t.Fatal("darwin pause+kill must not kill")
+	}
+	if daemonGuardConfig(&cfg, guard.ModePauseKill, "linux").NoKill {
+		t.Fatal("linux pause+kill must keep kill")
+	}
+}
