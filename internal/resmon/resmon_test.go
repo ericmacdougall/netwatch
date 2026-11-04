@@ -11,6 +11,7 @@ import (
 
 	"github.com/ericmacdougall/netwatch/internal/alerts"
 	"github.com/ericmacdougall/netwatch/internal/budget"
+	"github.com/ericmacdougall/netwatch/internal/danger"
 	"github.com/ericmacdougall/netwatch/internal/guard"
 	"github.com/ericmacdougall/netwatch/internal/resources"
 	"github.com/ericmacdougall/netwatch/internal/sampler"
@@ -378,4 +379,18 @@ func (a lineAppender) Append(rec any) error {
 	}
 	a.b.Write(append(j, '\n'))
 	return nil
+}
+
+// The detector uses the configured danger thresholds (guard_min_share and
+// friends), not the defaults; nil keeps the defaults.
+func TestDetectorUsesConfiguredDanger(t *testing.T) {
+	dc := danger.Defaults()
+	dc.MinShare, dc.HeadroomFrac, dc.P1Horizon = 0.1, 0.95, time.Minute
+	l := New(Deps{R: newFake(), Danger: &dc})
+	if l.det.Cfg != dc {
+		t.Fatalf("detector config %+v, want %+v", l.det.Cfg, dc)
+	}
+	if l := New(Deps{R: newFake()}); l.det.Cfg != danger.Defaults() {
+		t.Fatalf("nil Danger: %+v, want defaults", l.det.Cfg)
+	}
 }

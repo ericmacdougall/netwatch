@@ -90,7 +90,12 @@ type Deps struct {
 	SampleEvery           time.Duration // 10s
 	HotAlways             bool          // test daemon only
 	HotBytes              uint64        // a group at or above this makes us hot (2 GB)
-	TestTarget            *TestTarget   // test daemon only
+	// Danger is the detector's thresholds; nil means danger.Defaults().
+	// The daemon passes the same config the Machine gets, so the user's
+	// guard_min_share, guard_headroom_frac and guard_p1_horizon_s apply to
+	// detection as well as to pause and kill.
+	Danger     *danger.Config
+	TestTarget *TestTarget // test daemon only
 }
 
 // Loop is the running daemon state. Use New, then Run.
@@ -117,7 +122,11 @@ type Loop struct {
 // signalled even between scans.
 func New(d Deps) *Loop {
 	setDefaults(&d)
-	l := &Loop{d: d, det: &danger.Detector{Cfg: danger.Defaults()}, view: guard.ReaderView{R: d.R}}
+	dc := danger.Defaults()
+	if d.Danger != nil {
+		dc = *d.Danger
+	}
+	l := &Loop{d: d, det: &danger.Detector{Cfg: dc}, view: guard.ReaderView{R: d.R}}
 	l.trk = tracker.New(d.R, tracker.Config{Excluded: func(p *resources.Proc, exe string) bool {
 		l.mu.Lock()
 		f := l.cls.Excluded
