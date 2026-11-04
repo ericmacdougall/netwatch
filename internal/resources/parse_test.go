@@ -124,11 +124,36 @@ func TestPSILevelMapping(t *testing.T) {
 	cases := []struct {
 		full float64
 		want Level
-	}{{0.99, LevelNormal}, {1.0, LevelWarn}, {9.99, LevelWarn}, {10.0, LevelCritical}, {0, LevelNormal}}
+	}{{0.99, LevelNormal}, {1.0, LevelWarn}, {19.99, LevelWarn}, {20.0, LevelCritical}, {0, LevelNormal}}
 	for _, c := range cases {
 		if got := PSILevel(c.full); got != c.want {
 			t.Errorf("PSILevel(%v) = %v, want %v", c.full, got, c.want)
 		}
+	}
+}
+
+// Spec v11: Linux is critical at PSI full avg10 >= 20 or MemAvailable
+// under 3% of RAM, whichever comes first.
+func TestLinuxLevelMemAvailableFloor(t *testing.T) {
+	const total = 100 << 30
+	cases := []struct {
+		full  float64
+		avail uint64
+		want  Level
+	}{
+		{0, total * 3 / 100, LevelNormal},   // exactly 3%: not under
+		{0, total*3/100 - 1, LevelCritical}, // just under 3%
+		{1.5, total / 2, LevelWarn},         // PSI alone
+		{25, total / 2, LevelCritical},      // PSI alone
+		{0, 0, LevelNormal},                 // MemAvailable unknown (0 total) handled below
+	}
+	for i, c := range cases[:4] {
+		if got := LinuxLevel(c.full, c.avail, total); got != c.want {
+			t.Errorf("case %d: LinuxLevel(%v, %d) = %v, want %v", i, c.full, c.avail, got, c.want)
+		}
+	}
+	if got := LinuxLevel(0, 0, 0); got != LevelNormal {
+		t.Errorf("unknown RAM must not read as critical, got %v", got)
 	}
 }
 
