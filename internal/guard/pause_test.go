@@ -3,6 +3,7 @@
 package guard
 
 import (
+	"errors"
 	"strings"
 	"syscall"
 	"testing"
@@ -331,4 +332,27 @@ func TestUnprotectedReasonHasNoPath(t *testing.T) {
 		}
 	}
 	must(t, found, "no unprotected alert")
+}
+
+type failStore struct{ saves int }
+
+func (f *failStore) Load() (State, error) { return State{}, ErrMissing }
+func (f *failStore) Save(State) (time.Duration, error) {
+	f.saves++
+	return 0, errors.New("state path is unsafe")
+}
+
+// With nothing to record, Apply must not write (or log a save error) every
+// poll: where the state dir is untrusted (Windows owner check) that was a
+// GUARD_ERROR record every 10 seconds on a host with the guard off.
+func TestApplyWithNothingToRecordDoesNotSave(t *testing.T) {
+	st := &failStore{}
+	ev := &sink{}
+	ex := &Executor{M: NewMachine(Config{Mode: ModeOff}), Store: st, Events: ev}
+	for i := 0; i < 5; i++ {
+		ex.Apply(nil)
+	}
+	if st.saves != 0 || len(ev.ev) != 0 {
+		t.Fatalf("saves %d, events %v", st.saves, ev.ev)
+	}
 }
