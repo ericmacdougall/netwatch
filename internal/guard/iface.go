@@ -81,4 +81,7 @@ type Notifier interface {
 
 // SigCONT is SIGCONT on every platform the package builds for (Windows has
 // no syscall.SIGCONT), for callers that inspect a signal.
-const SigCONT = sigCONT
+const (
+	SigCONT = sigCONT
+	SigSTOP = sigSTOP
+)

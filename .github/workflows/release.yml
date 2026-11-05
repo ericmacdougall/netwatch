@@ -1,8 +1,10 @@
 name: release
 
+# Disabled: releases are built and uploaded locally from dev2
+# (scripts/build-release.sh + gh release create), per the no-GitHub-CI rule.
+# The tag trigger was removed; this runs only if dispatched by hand.
 on:
-  push:
-    tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: write

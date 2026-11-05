@@ -1,7 +1,6 @@
 package guard
 
 import (
-	"syscall"
 	"testing"
 	"time"
 )
@@ -192,9 +191,9 @@ func TestManualResumeUsesSameRecordsAndReconcile(t *testing.T) {
 	must(t, len(after.Groups) == len(before.Groups), "the CLI must not write the state file while the daemon runs")
 	must(t, r.ex.Reconcile() == nil, "reconcile")
 	must(t, r.rec(100) == nil, "the daemon must drop the record the CLI released")
-	n := r.w.count(syscall.SIGSTOP)
+	n := r.w.count(sigSTOP)
 	r.poll(2*time.Second, normal)
-	must(t, r.w.count(syscall.SIGSTOP) == n, "a manually resumed group must not be paused again by new-children logic")
+	must(t, r.w.count(sigSTOP) == n, "a manually resumed group must not be paused again by new-children logic")
 }
 
 // Code-inspection F1: the daemon pauses another group after the CLI read

@@ -33,13 +33,13 @@ var (
 // MaxJSONDepth is the nesting limit for DecodeJSON.
 const MaxJSONDepth = 64
 
-// selfUID is a variable so tests can simulate a foreign owner without root.
-var selfUID = os.Getuid
-
 // openRegular opens path without following a final symlink or blocking on
 // a FIFO, then validates the descriptor itself (not the path) so there is no
 // check-then-use race. The caller closes the file.
 func openRegular(path string, o Opts) (*os.File, os.FileInfo, error) {
+	if err := refuseLink(path); err != nil {
+		return nil, nil, err
+	}
 	f, err := os.OpenFile(path, readFlags, 0)
 	if err != nil {
 		if isSymlinkLoop(err) {
@@ -56,28 +56,11 @@ func openRegular(path string, o Opts) (*os.File, os.FileInfo, error) {
 		f.Close()
 		return nil, nil, fmt.Errorf("%w: %s", ErrNotRegular, path)
 	}
-	if err := checkOwnerPerm(fi, o); err != nil {
+	if err := checkOwnerPerm(f, fi, o); err != nil {
 		f.Close()
 		return nil, nil, fmt.Errorf("%w: %s", err, path)
 	}
 	return f, fi, nil
-}
-
-func checkOwnerPerm(fi os.FileInfo, o Opts) error {
-	if o.RequireOwner {
-		want := selfUID()
-		if o.OwnerUID != nil {
-			want = *o.OwnerUID
-		}
-		uid, ok := ownerUID(fi)
-		if !ok || uid != uint32(want) {
-			return ErrOwner
-		}
-	}
-	if o.MaxPerm != 0 && uint32(fi.Mode().Perm())&^o.MaxPerm != 0 {
-		return ErrPerm
-	}
-	return nil
 }
 
 // ReadFile reads a regular file of at most o.Max bytes. Max <= 0 is an

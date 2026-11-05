@@ -120,6 +120,7 @@ var (
 
 // procInfo issues proc_info and returns the byte count.
 func procInfo(call, pid, flavor int, arg uint64, buf unsafe.Pointer, size int) (int, error) {
+	//lint:ignore SA1019 libproc has no libSystem wrapper reachable without cgo; the syscall number is stable on the macOS versions we support
 	r, _, e := unix.Syscall6(unix.SYS_PROC_INFO, uintptr(call), uintptr(pid), uintptr(flavor),
 		uintptr(arg), uintptr(buf), uintptr(size))
 	if e != 0 {

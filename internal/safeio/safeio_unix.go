@@ -22,6 +22,9 @@ func isSymlinkLoop(err error) bool {
 	return errors.Is(err, syscall.ELOOP) || errors.Is(err, syscall.EMLINK)
 }
 
+// selfUID is a variable so tests can simulate a foreign owner without root.
+var selfUID = os.Getuid
+
 func ownerUID(fi os.FileInfo) (uint32, bool) {
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok {
@@ -29,5 +32,26 @@ func ownerUID(fi os.FileInfo) (uint32, bool) {
 	}
 	return st.Uid, true
 }
+
+// checkOwnerPerm validates the owner and the mode bits of an open file.
+func checkOwnerPerm(_ *os.File, fi os.FileInfo, o Opts) error {
+	if o.RequireOwner {
+		want := selfUID()
+		if o.OwnerUID != nil {
+			want = *o.OwnerUID
+		}
+		uid, ok := ownerUID(fi)
+		if !ok || uid != uint32(want) {
+			return ErrOwner
+		}
+	}
+	if o.MaxPerm != 0 && uint32(fi.Mode().Perm())&^o.MaxPerm != 0 {
+		return ErrPerm
+	}
+	return nil
+}
+
+// refuseLink is a no-op: O_NOFOLLOW already refuses a final symlink.
+func refuseLink(string) error { return nil }
 
 func syncDir(d *os.File) error { return d.Sync() }

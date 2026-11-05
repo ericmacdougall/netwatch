@@ -147,15 +147,6 @@ func (m *Machine) addMembers(key string, mem []Member) {
 	m.dirty = true
 }
 
-func (m *Machine) addAlready(key string, mem Member) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if r := m.st.Groups[key]; r != nil {
-		r.Already = append(r.Already, PidStart{mem.PID, mem.Start})
-		m.dirty = true
-	}
-}
-
 func (m *Machine) markSig(key string, pid int, stopped, termed bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

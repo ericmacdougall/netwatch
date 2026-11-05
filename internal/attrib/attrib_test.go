@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -213,12 +214,16 @@ func TestLabelRejectsHostileInput(t *testing.T) {
 		}
 	}
 	// A symlinked WAL file is not followed.
-	writeWAL(t, root, "sess", "other.jsonl", walLine(base, "evil"))
-	if err := os.Symlink(filepath.Join(root, "sess", "other.jsonl"), filepath.Join(root, "sess", "main.jsonl")); err != nil {
-		t.Fatal(err)
-	}
-	if got := l.Label("sess", base.Add(time.Second)); got != (Label{}) {
-		t.Fatalf("symlink followed: %+v", got)
+	// (Windows has no O_NOFOLLOW; WAL labelling reads Claude Code hook logs
+	// on macOS and Linux, so the symlink control is unix-only.)
+	if runtime.GOOS != "windows" {
+		writeWAL(t, root, "sess", "other.jsonl", walLine(base, "evil"))
+		if err := os.Symlink(filepath.Join(root, "sess", "other.jsonl"), filepath.Join(root, "sess", "main.jsonl")); err != nil {
+			t.Fatal(err)
+		}
+		if got := l.Label("sess", base.Add(time.Second)); got != (Label{}) {
+			t.Fatalf("symlink followed: %+v", got)
+		}
 	}
 	// An oversize line and garbage are skipped, not fatal.
 	writeWAL(t, root, "sess2", "main.jsonl", strings.Repeat("x", 100000)+"\n", "not json\n", walLine(base, ""))

@@ -1,8 +1,8 @@
 package guard
 
 import (
+	"errors"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -38,7 +38,7 @@ func TestPauseSelectsOnlyCausalGroup(t *testing.T) {
 	}
 	must(t, r.paused(100), "the D4 group must be paused")
 	must(t, r.rec(200) == nil, "a small non-causal group must not be paused")
-	for _, pid := range r.w.sigs(syscall.SIGSTOP) {
+	for _, pid := range r.w.sigs(sigSTOP) {
 		must(t, pid == 100 || pid == 101, "signalled outsider pid %d", pid)
 	}
 
@@ -51,7 +51,7 @@ func TestPauseSelectsOnlyCausalGroup(t *testing.T) {
 		c.grow(100, gib)
 		c.poll(2*time.Second, normal)
 	}
-	must(t, c.rec(100) == nil && c.w.count(syscall.SIGSTOP) == 0, "normal pressure must not pause")
+	must(t, c.rec(100) == nil && c.w.count(sigSTOP) == 0, "normal pressure must not pause")
 }
 
 func TestP1WithHealthyPressureAndHeadroomAlertsOnly(t *testing.T) {
@@ -67,7 +67,7 @@ func TestP1WithHealthyPressureAndHeadroomAlertsOnly(t *testing.T) {
 		r.poll(2*time.Second, normal)
 	}
 	must(t, r.lastSig.P1 && !r.lastSig.P1Corroborated, "want P1 uncorroborated, got %+v", r.lastSig)
-	must(t, r.rec(100) == nil && r.w.count(syscall.SIGSTOP) == 0, "uncorroborated P1 must not pause")
+	must(t, r.rec(100) == nil && r.w.count(sigSTOP) == 0, "uncorroborated P1 must not pause")
 
 	// Control: headroom 1 GiB (< 1.28 GiB) plus pressure warn corroborates.
 	c := newRig(t, ModePause)
@@ -93,7 +93,7 @@ func TestStopOrderLeaderFirstThenTopDown(t *testing.T) {
 		r.grow(100, gib)
 		r.poll(2*time.Second, warn)
 	}
-	got := r.w.sigs(syscall.SIGSTOP)
+	got := r.w.sigs(sigSTOP)
 	want := []int{100, 110, 120, 111}
 	// A leader whose pid is higher than its children's (pid wrap) still
 	// goes first.
@@ -106,7 +106,7 @@ func TestStopOrderLeaderFirstThenTopDown(t *testing.T) {
 		w.grow(500, gib)
 		w.poll(2*time.Second, warn)
 	}
-	if g := w.w.sigs(syscall.SIGSTOP); len(g) != 3 || g[0] != 500 {
+	if g := w.w.sigs(sigSTOP); len(g) != 3 || g[0] != 500 {
 		t.Fatalf("leader must be stopped first, got %v", g)
 	}
 	must(t, len(got) == len(want), "stops %v", got)
@@ -121,7 +121,7 @@ func TestNewChildrenAreReEnumeratedAndStopped(t *testing.T) {
 	r.w.add(150, 100, 100, r.at) // forked after the pause
 	r.poll(2*time.Second, warn)
 	must(t, r.w.procs[150].stopped, "a child forked after the pause must be stopped")
-	must(t, r.w.count(syscall.SIGSTOP) == 3, "each member stopped once, got %v", r.w.sigs(syscall.SIGSTOP))
+	must(t, r.w.count(sigSTOP) == 3, "each member stopped once, got %v", r.w.sigs(sigSTOP))
 }
 
 func TestAlreadyStoppedMembersAreNeverResumed(t *testing.T) {
@@ -133,14 +133,14 @@ func TestAlreadyStoppedMembersAreNeverResumed(t *testing.T) {
 		r.grow(100, gib)
 		r.poll(2*time.Second, warn)
 	}
-	must(t, !contains(r.w.sigs(syscall.SIGSTOP), 102), "an already-stopped member must not be signalled")
+	must(t, !contains(r.w.sigs(sigSTOP), 102), "an already-stopped member must not be signalled")
 	rc := r.rec(100)
 	must(t, rc != nil && len(rc.Already) == 1 && rc.Already[0].PID == 102, "already-stopped member must be recorded: %+v", rc)
 	r.run(16, 5*time.Second, normal) // clear and resume
 	must(t, !r.paused(100), "group must be resumed after the clear")
 	must(t, r.w.procs[102].stopped, "the user's stopped member must stay stopped")
 	must(t, !r.w.procs[100].stopped && !r.w.procs[101].stopped, "netwatch's members must run again")
-	must(t, !contains(r.w.sigs(syscall.SIGCONT), 102), "SIGCONT must never go to a member netwatch did not stop")
+	must(t, !contains(r.w.sigs(sigCONT), 102), "SIGCONT must never go to a member netwatch did not stop")
 }
 
 func contains(s []int, v int) bool {
@@ -184,7 +184,7 @@ func TestInelligibleNeverSignalledAndUnprotectedRaised(t *testing.T) {
 		r.inel["chrome"] += gib / 4
 		r.poll(2*time.Second, crit)
 	}
-	must(t, r.w.count(syscall.SIGSTOP) == 0 && r.w.count(syscall.SIGTERM) == 0 && r.w.count(syscall.SIGKILL) == 0,
+	must(t, r.w.count(sigSTOP) == 0 && r.w.count(sigTERM) == 0 && r.w.count(sigKILL) == 0,
 		"nothing may be signalled, log %v", r.w.log)
 	must(t, r.countKind(ActUnprotected) == 1, "HOST_AT_RISK_UNPROTECTED must be raised once, got %d", r.countKind(ActUnprotected))
 	must(t, len(r.ev.named("HOST_AT_RISK_UNPROTECTED")) == 1, "event not written")
@@ -329,4 +329,27 @@ func TestUnprotectedReasonHasNoPath(t *testing.T) {
 		}
 	}
 	must(t, found, "no unprotected alert")
+}
+
+type failStore struct{ saves int }
+
+func (f *failStore) Load() (State, error) { return State{}, ErrMissing }
+func (f *failStore) Save(State) (time.Duration, error) {
+	f.saves++
+	return 0, errors.New("state path is unsafe")
+}
+
+// With nothing to record, Apply must not write (or log a save error) every
+// poll: where the state dir is untrusted (Windows owner check) that was a
+// GUARD_ERROR record every 10 seconds on a host with the guard off.
+func TestApplyWithNothingToRecordDoesNotSave(t *testing.T) {
+	st := &failStore{}
+	ev := &sink{}
+	ex := &Executor{M: NewMachine(Config{Mode: ModeOff}), Store: st, Events: ev}
+	for i := 0; i < 5; i++ {
+		ex.Apply(nil)
+	}
+	if st.saves != 0 || len(ev.ev) != 0 {
+		t.Fatalf("saves %d, events %v", st.saves, ev.ev)
+	}
 }

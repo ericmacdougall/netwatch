@@ -347,3 +347,5 @@ func TestLowConfidenceCandidateIsNotTheLabel(t *testing.T) {
 		t.Error("attributed replay claims assumed eligibility")
 	}
 }
+
+func nameMatches(c transcript.Call, want string) bool { return matchTier(c, want) != matchNone }

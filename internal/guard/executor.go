@@ -120,10 +120,15 @@ func (e *Executor) Apply(acts []Action) {
 			e.applyResume(a)
 		}
 	}
-	if _, slow, err := e.save(); err != nil {
-		e.events().Event("GUARD_ERROR", map[string]any{"op": "save", "error": err.Error()})
-	} else if slow {
-		e.events().Event("GUARD_ERROR", map[string]any{"op": "save", "error": "slow fsync, continuing"})
+	// Nothing to record: skip the write. Saving an unchanged state every
+	// poll costs an fsync, and where the state dir cannot be trusted (the
+	// Windows owner check fails closed) it logged GUARD_ERROR every poll.
+	if len(acts) > 0 || e.M.Dirty() {
+		if _, slow, err := e.save(); err != nil {
+			e.events().Event("GUARD_ERROR", map[string]any{"op": "save", "error": err.Error()})
+		} else if slow {
+			e.events().Event("GUARD_ERROR", map[string]any{"op": "save", "error": "slow fsync, continuing"})
+		}
 	}
 	for _, a := range acts {
 		switch a.Kind {
