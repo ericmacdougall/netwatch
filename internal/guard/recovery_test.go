@@ -271,16 +271,20 @@ func TestFileStoreHardening(t *testing.T) {
 	os.Remove(p)
 
 	// A group-writable directory is refused.
-	os.Chmod(filepath.Dir(p), 0o770)
-	_, err = fs.Save(st)
-	must(t, errors.Is(err, ErrUnsafe), "wide directory: %v", err)
-	os.Chmod(filepath.Dir(p), 0o700)
+	if runtime.GOOS != "windows" { // chmod does not change access on Windows; the ACL check has its own tests
+		os.Chmod(filepath.Dir(p), 0o770)
+		_, err = fs.Save(st)
+		must(t, errors.Is(err, ErrUnsafe), "wide directory: %v", err)
+		os.Chmod(filepath.Dir(p), 0o700)
+	}
 
 	// Wide file mode, FIFO-like non-regular, missing, corrupt.
 	fs.Save(st)
-	os.Chmod(p, 0o644)
-	_, err = fs.Load()
-	must(t, errors.Is(err, ErrUnsafe), "wide file mode: %v", err)
+	if runtime.GOOS != "windows" {
+		os.Chmod(p, 0o644)
+		_, err = fs.Load()
+		must(t, errors.Is(err, ErrUnsafe), "wide file mode: %v", err)
+	}
 	os.Remove(p)
 	_, err = fs.Load()
 	must(t, errors.Is(err, ErrMissing), "missing: %v", err)
