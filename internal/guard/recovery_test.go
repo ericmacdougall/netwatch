@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -467,4 +468,17 @@ func TestResumePIDRecoversFromUnusableState(t *testing.T) {
 	must(t, ResumePID(bad, r.w, r.w, 101, 0) == nil, "own stopped pid resumes")
 	must(t, r.w.count(syscall.SIGCONT) == 1 && !r.w.procs[101].stopped, "exactly one SIGCONT, to 101")
 	must(t, errors.Is(ResumePID(bad, r.w, r.w, 101, 0), ErrNotStopped), "a running pid is not stopped any more")
+}
+
+// An unusable-state refusal must point at the way out (click-test low).
+func TestManualResumeRefusalPointsToWayOut(t *testing.T) {
+	w := newWorld()
+	dir := t.TempDir()
+	os.Chmod(dir, 0o700)
+	fs := &FileStore{Path: filepath.Join(dir, "state.json")}
+	_, err := ManualResume(fs, w, w, t0, 0, true)
+	must(t, err != nil && strings.Contains(err.Error(), "--check --force"), "missing: %v", err)
+	os.WriteFile(fs.Path, []byte("garbage"), 0o600)
+	_, err = ManualResume(fs, w, w, t0, 0, true)
+	must(t, err != nil && strings.Contains(err.Error(), "resume --pid PID"), "corrupt: %v", err)
 }

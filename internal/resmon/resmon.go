@@ -202,25 +202,18 @@ func (l *Loop) Tick() (hot bool) {
 		// No reading, no new decision: the guard never pauses or kills on a
 		// failed read, but the pause time limits still release held groups.
 		l.d.Errs("system", err)
+		// A mode change must still take effect while reads fail: `guard off`
+		// or `guard alert` is how a user releases held groups, and the blind
+		// Step resumes everything the new mode cannot hold.
+		l.applyMode()
+		l.reconcile()
 		l.d.Exec.Apply(l.d.Machine.Step(guard.Snapshot{At: now}))
 		return false
 	}
 	if sys.At.IsZero() {
 		sys.At = now
 	}
-	if l.d.Mode != nil {
-		if m, ok := l.d.Mode(); ok && m != l.d.Machine.Mode() {
-			old := l.d.Machine.Mode()
-			l.d.Machine.SetMode(m)
-			l.d.Events.Event("MODE_CHANGE", map[string]any{"from": string(old), "to": string(m)})
-			if l.d.Notify != nil {
-				// Spec: every change is visible to the user, including one an
-				// agent made.
-				l.d.Notify.Notify("mode-change", "netwatch memory guard",
-					fmt.Sprintf("Guard mode changed from %s to %s. Set it with: netwatch guard MODE", old, m))
-			}
-		}
-	}
+	l.applyMode()
 	if !now.Before(l.nextScan) {
 		l.scan(now, sys)
 	}
@@ -237,10 +230,7 @@ func (l *Loop) Tick() (hot bool) {
 	procs, who := l.procs, l.cls.Who
 	l.mu.Unlock()
 
-	// A missing state file just means nothing has been paused yet.
-	if err := l.d.Exec.Reconcile(); err != nil && !errors.Is(err, guard.ErrMissing) {
-		l.d.Errs("guard reconcile", err)
-	}
+	l.reconcile()
 	l.d.Exec.Apply(l.d.Machine.Step(snap))
 
 	l.d.Alerts.Run(alerts.Input{At: now, Sys: sys, Procs: procs, Series: alertSeries(terms), Who: who})
@@ -263,6 +253,32 @@ func (l *Loop) Tick() (hot bool) {
 		l.nextScan = now.Add(scanGap)
 	}
 	return hot
+}
+
+// applyMode switches the machine to the configured mode and tells the user.
+func (l *Loop) applyMode() {
+	if l.d.Mode == nil {
+		return
+	}
+	if m, ok := l.d.Mode(); ok && m != l.d.Machine.Mode() {
+		old := l.d.Machine.Mode()
+		l.d.Machine.SetMode(m)
+		l.d.Events.Event("MODE_CHANGE", map[string]any{"from": string(old), "to": string(m)})
+		if l.d.Notify != nil {
+			// Spec: every change is visible to the user, including one an
+			// agent made.
+			l.d.Notify.Notify("mode-change", "netwatch memory guard",
+				fmt.Sprintf("Guard mode changed from %s to %s. Set it with: netwatch guard MODE", old, m))
+		}
+	}
+}
+
+// reconcile applies resume requests filed by the CLI. A missing state file
+// just means nothing has been paused yet.
+func (l *Loop) reconcile() {
+	if err := l.d.Exec.Reconcile(); err != nil && !errors.Is(err, guard.ErrMissing) {
+		l.d.Errs("guard reconcile", err)
+	}
 }
 
 // scan reads the process table and refreshes everything derived from it.

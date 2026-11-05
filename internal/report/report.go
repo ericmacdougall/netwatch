@@ -70,6 +70,11 @@ type Report struct {
 	Self        *SelfStats     `json:"self,omitempty"`
 	Counts      map[string]int `json:"counts"`
 	Events      []record.Event `json:"events"`
+	// Starts and Stops count daemon lifecycle events in the window. They are
+	// not network events, so they stay out of EventCount; without these a
+	// window holding only a restart reads as "0 events" and looks like lost data.
+	Starts int `json:"daemon_starts,omitempty"`
+	Stops  int `json:"daemon_stops,omitempty"`
 	// Resources is the memory summary. It is always present; with no
 	// resources.jsonl data it is {"samples": 0}.
 	Resources Resources `json:"resources"`
@@ -153,7 +158,12 @@ func Build(since string, from time.Time, samples []record.Sample, events []recor
 		r.Self = &self
 	}
 	for _, e := range events {
-		if e.Event == record.Start || e.Event == record.Stop {
+		if e.Event == record.Start {
+			r.Starts++
+			continue
+		}
+		if e.Event == record.Stop {
+			r.Stops++
 			continue
 		}
 		// Memory and guard events are summarised under Resources; the
@@ -217,6 +227,9 @@ func (r Report) WriteText(w io.Writer) error {
 			fmt.Fprintf(b, "  avg loss %g%%", *r.GatewayLoss)
 		}
 		b.WriteString("\n")
+	}
+	if r.Starts > 0 || r.Stops > 0 {
+		fmt.Fprintf(b, "  daemon: %d starts, %d stops (lifecycle events are not counted above)\n", r.Starts, r.Stops)
 	}
 	if r.Samples > 0 {
 		fmt.Fprintf(b, "  avg traffic: in %g kB/s, out %g kB/s\n", r.AvgInKBps, r.AvgOutKBps)

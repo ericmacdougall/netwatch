@@ -120,11 +120,24 @@ func ManualResumeApplying(store Store, view ProcView, sig Signaller, now time.Ti
 	return manualResume(store, view, sig, now, pgid, all, nil, pending)
 }
 
+// unusableHint tells the user the way out when the state file cannot be
+// trusted: nothing is recorded, so groups are resumed one pid at a time.
+const unusableHint = "list your stopped processes with: netwatch resume --all --check --force; resume one with: netwatch resume --pid PID"
+
+// hintFor adds the right way out. A missing file is the normal state of an
+// install whose daemon never paused anything, so there is nothing to resume.
+func hintFor(err error) string {
+	if errors.Is(err, ErrMissing) {
+		return "no state file means netwatch has not paused anything on this install (resume fails closed by design); to check for stopped processes of yours: netwatch resume --all --check --force"
+	}
+	return unusableHint
+}
+
 func manualResume(store Store, view ProcView, sig Signaller, now time.Time, pgid int, all bool, req ResumeRequests, pending []string) (ResumeReport, error) {
 	var rep ResumeReport
 	st, err := store.Load()
 	if err != nil {
-		return rep, fmt.Errorf("resume refused, state unusable: %w", err)
+		return rep, fmt.Errorf("resume refused, state unusable: %w; %s", err, hintFor(err))
 	}
 	st.init()
 	rep.Pruned = prune(&st, view)
@@ -247,7 +260,7 @@ func RollbackGate(store Store, view ProcView, uid int, force bool) (RollbackRepo
 			sort.Ints(rep.StoppedPIDs)
 			return rep, nil
 		}
-		return rep, fmt.Errorf("rollback refused, state unusable: %w", err)
+		return rep, fmt.Errorf("rollback refused, state unusable: %w; %s", err, hintFor(err))
 	}
 	st.init()
 	prune(&st, view)
