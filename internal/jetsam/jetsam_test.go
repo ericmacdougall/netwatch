@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -220,13 +221,15 @@ func TestParseFileHostileFiles(t *testing.T) {
 	good := filepath.Join(dir, "good.ips")
 	os.WriteFile(good, []byte(goodReport()), 0o600)
 	link := filepath.Join(dir, "link.ips")
-	if err := os.Symlink(good, link); err == nil {
+	if err := os.Symlink(good, link); err == nil && runtime.GOOS != "windows" {
 		if _, err := ParseFile(link); !errors.Is(err, safeio.ErrNotRegular) {
 			t.Errorf("symlink: %v", err)
 		}
 	}
-	if _, err := ParseFile("/dev/zero"); !errors.Is(err, safeio.ErrNotRegular) {
-		t.Errorf("/dev/zero: %v", err)
+	if runtime.GOOS != "windows" { // no /dev/zero on Windows
+		if _, err := ParseFile("/dev/zero"); !errors.Is(err, safeio.ErrNotRegular) {
+			t.Errorf("/dev/zero: %v", err)
+		}
 	}
 	if _, err := ParseFile(good); err != nil {
 		t.Errorf("control: %v", err)

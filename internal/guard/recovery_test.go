@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -248,7 +249,9 @@ func TestFileStoreHardening(t *testing.T) {
 	must(t, err == nil, "save: %v", err)
 	fi, _ := os.Stat(p)
 	di, _ := os.Stat(filepath.Dir(p))
-	must(t, fi.Mode().Perm() == 0o600 && di.Mode().Perm() == 0o700, "modes %v %v", fi.Mode().Perm(), di.Mode().Perm())
+	if runtime.GOOS != "windows" { // Windows reports synthetic mode bits; its ACL check has its own tests
+		must(t, fi.Mode().Perm() == 0o600 && di.Mode().Perm() == 0o700, "modes %v %v", fi.Mode().Perm(), di.Mode().Perm())
+	}
 	got, err := fs.Load()
 	must(t, err == nil && got.Groups["k"].PGID == 5 && got.Version == StateVersion, "roundtrip: %v %+v", err, got)
 	ents, _ := os.ReadDir(filepath.Dir(p))

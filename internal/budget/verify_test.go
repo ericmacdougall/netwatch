@@ -3,6 +3,7 @@ package budget
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -95,6 +96,7 @@ func (e *env) load(t *testing.T) *Result {
 }
 
 func TestControlGenuineSidecarIsHonoured(t *testing.T) {
+	skipOnWindows(t)
 	e := newEnv(t)
 	r := e.load(t)
 	d, ok := r.Budgets[childPID]
@@ -112,6 +114,7 @@ func TestControlGenuineSidecarIsHonoured(t *testing.T) {
 // Each variant changes exactly one thing from the control and must be
 // rejected for that reason. The control above proves they are not vacuous.
 func TestSidecarRules(t *testing.T) {
+	skipOnWindows(t)
 	good := func(t *testing.T, e *env) string {
 		b, _ := os.ReadFile("testdata/run_capped/4242.json")
 		return string(b)
@@ -261,6 +264,7 @@ func TestSidecarRules(t *testing.T) {
 }
 
 func TestClampAndMostRestrictiveWins(t *testing.T) {
+	skipOnWindows(t)
 	t.Run("clamped to half of RAM", func(t *testing.T) {
 		e := newEnv(t)
 		b, _ := os.ReadFile("testdata/run_capped/4242.json")
@@ -306,6 +310,7 @@ func TestMergeKeepsMostRestrictive(t *testing.T) {
 }
 
 func TestOverBudgetCountsAsUndeclared(t *testing.T) {
+	skipOnWindows(t)
 	e := newEnv(t)
 	r := e.load(t)
 	for _, c := range []struct {
@@ -337,6 +342,7 @@ func TestMissingDirIsEmpty(t *testing.T) {
 }
 
 func TestHostileEntriesInDir(t *testing.T) {
+	skipOnWindows(t)
 	e := newEnv(t)
 	os.Mkdir(filepath.Join(e.dir, "4300.json"), 0o700) // a directory named like a sidecar
 	e.put(t, "garbage.json", "{", 0o600)
@@ -355,4 +361,13 @@ func readFixture(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// skipOnWindows: sidecars name a unix run_capped wrapper script and process
+// ancestry; the budget feature is not offered on Windows.
+func skipOnWindows(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("budget sidecars need the unix run_capped wrapper")
+	}
 }
