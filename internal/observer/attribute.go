@@ -143,9 +143,9 @@ func (l *Ledger) Attribute(p Proc, env map[string]string, procs map[int64]Proc) 
 		return Attribution{State: StateAttributed, Claim: *envClaim, Via: "both"}
 	case envClaim != nil:
 		if row, ok := l.byRun[envClaim.RunID]; ok && row.hookSSH() {
-			return Attribution{State: StateHookSSH, Claim: *envClaim, Via: "env"}
+			return Attribution{State: StateHookSSH, Claim: *envClaim, Via: "env", Detail: "env-only"}
 		}
-		return Attribution{State: StateAttributed, Claim: *envClaim, Via: "env"}
+		return Attribution{State: StateAttributed, Claim: *envClaim, Via: "env", Detail: "env-only"}
 	case anc != nil:
 		if ancRow.hookSSH() {
 			return Attribution{State: StateHookSSH, Claim: *anc, Via: "ancestry"}

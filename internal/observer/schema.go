@@ -42,7 +42,10 @@ type Claim struct {
 type Attribution struct {
 	State string `json:"state"`
 	Claim
-	Via      string `json:"via,omitempty"`
+	Via string `json:"via,omitempty"`
+	// Detail is "env-only" when the only evidence is the process environment
+	// (no verified or hook-ssh ancestry row), so readers can weight it.
+	Detail   string `json:"detail,omitempty"`
 	Env      *Claim `json:"env,omitempty"`
 	Ancestry *Claim `json:"ancestry,omitempty"`
 }
@@ -55,9 +58,10 @@ func (a Attribution) MarshalJSON() ([]byte, error) {
 			State string `json:"state"`
 			Claim
 			Via      string `json:"via"`
+			Detail   string `json:"detail,omitempty"`
 			Ancestry *Claim `json:"ancestry,omitempty"`
 		}
-		f := full{State: a.State, Claim: a.Claim, Via: a.Via}
+		f := full{State: a.State, Claim: a.Claim, Via: a.Via, Detail: a.Detail}
 		if a.State == StateHookSSH {
 			f.Ancestry = a.Ancestry
 		}
@@ -213,6 +217,9 @@ func (a Attribution) validate() error {
 		case "env", "ancestry", "both":
 		default:
 			return fmt.Errorf("via %q", a.Via)
+		}
+		if a.Detail != "" && (a.Detail != "env-only" || a.Via != "env") {
+			return fmt.Errorf("detail %q is only valid as env-only with via env", a.Detail)
 		}
 		if a.State == StateAttributed && a.Ancestry != nil {
 			return errors.New("attributed must not carry an ancestry object")

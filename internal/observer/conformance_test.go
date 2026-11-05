@@ -115,6 +115,7 @@ func TestValidateRejectsBrokenDocuments(t *testing.T) {
 		"bad via":            func(d *Document) { d.Samples[0].Attribution.Via = "cwd" },
 		"bad run id":         func(d *Document) { d.Samples[0].Attribution.RunID = "xyz" },
 		"conflict equal":     func(d *Document) { setConflictEqual(d) },
+		"detail on ancestry": func(d *Document) { d.Samples[0].Attribution.Detail = "env-only" },
 		"unattributed extra": func(d *Document) { setUnattributedExtra(d) },
 	}
 	for name, f := range mut {

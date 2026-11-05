@@ -51,6 +51,9 @@ func TestAttributeStates(t *testing.T) {
 		if err := a.validate(); err != nil {
 			t.Errorf("%s: invalid result: %v", c.name, err)
 		}
+		if wantDetail := c.via == "env"; (a.Detail == "env-only") != wantDetail {
+			t.Errorf("%s: detail %q, env-only expected=%v", c.name, a.Detail, wantDetail)
+		}
 	}
 	reused := map[int64]Proc{100: {100, 1, "proc:777"}, 300: {300, 100, "proc:3"}}
 	if a := l.Attribute(reused[300], nil, reused); a.State != StateUnattributed {
