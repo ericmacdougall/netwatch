@@ -100,8 +100,6 @@ func matchTier(c transcript.Call, want string) int {
 	return matchNone
 }
 
-func nameMatches(c transcript.Call, want string) bool { return matchTier(c, want) != matchNone }
-
 // RankCandidates implements the rule above for a process named process. It
 // returns at most five candidates.
 func RankCandidates(calls []transcript.Call, start time.Time, process string) []Candidate {

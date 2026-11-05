@@ -189,12 +189,3 @@ func TestParseStatusAndBtime(t *testing.T) {
 		t.Fatal("ticks")
 	}
 }
-
-func contains(s []int, v int) bool {
-	for _, x := range s {
-		if x == v {
-			return true
-		}
-	}
-	return false
-}
