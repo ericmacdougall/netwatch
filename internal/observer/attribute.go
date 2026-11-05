@@ -12,8 +12,8 @@ import (
 var EnvKeys = []string{"AGENT_HARNESS_TASK", "AGENT_ID", "AGENT_HARNESS_TICKET", "AGENT_HARNESS_SESSION", "AGENT_HARNESS_RUN_ID"}
 
 // LedgerRow is the part of an ah-run ledger row the observer uses. The
-// ledger never holds commands or environments. ASSUMPTION: field names follow
-// the contract prose (observer.md); confirm against a real row.
+// ledger never holds commands or environments. Field names checked against
+// the writer (ah_run.py Ledger.write at 6a75b32).
 type LedgerRow struct {
 	RunID      string  `json:"run_id"`
 	Task       string  `json:"task"`
@@ -24,8 +24,18 @@ type LedgerRow struct {
 	PID        int64   `json:"pid"`
 	StartToken string  `json:"start_token"`
 	End        *string `json:"end"`
-	Via        string  `json:"via"` // "hook-ssh" when the line was built by the hook
+	// Attribution is the writer's verdict: "verified", "unverified",
+	// "hook-ssh", "remote-unattributed" or "remote-unwrapped".
+	Attribution string `json:"attribution"`
 }
+
+// hookSSH reports whether the run came over a hook-built ssh line.
+func (r LedgerRow) hookSSH() bool { return r.Attribution == "hook-ssh" }
+
+// usable reports whether the row may attribute a process. Only rows the
+// writer verified, or hook-ssh rows (reported as such), are used; unverified
+// and remote rows yield no claim rather than a guess.
+func (r LedgerRow) usable() bool { return r.Attribution == "verified" || r.hookSSH() }
 
 // Claim returns the row's attribution claim.
 func (r LedgerRow) Claim() Claim {
@@ -76,6 +86,9 @@ func LoadLedger(dir string) (*Ledger, error) {
 
 // Add indexes a row.
 func (l *Ledger) Add(r LedgerRow) {
+	if !r.usable() {
+		return
+	}
 	l.byRun[r.RunID] = r
 	if r.PID != 0 && r.StartToken != "" {
 		l.byPID[ptKey{r.PID, r.StartToken}] = r
@@ -122,19 +135,19 @@ func (l *Ledger) Attribute(p Proc, env map[string]string, procs map[int64]Proc) 
 	}
 	switch {
 	case envClaim != nil && anc != nil && *envClaim != *anc:
-		if ancRow.Via == "hook-ssh" {
+		if ancRow.hookSSH() {
 			return Attribution{State: StateHookSSH, Claim: *envClaim, Via: "env", Ancestry: anc}
 		}
 		return Attribution{State: StateConflict, Env: envClaim, Ancestry: anc}
 	case envClaim != nil && anc != nil:
 		return Attribution{State: StateAttributed, Claim: *envClaim, Via: "both"}
 	case envClaim != nil:
-		if row, ok := l.byRun[envClaim.RunID]; ok && row.Via == "hook-ssh" {
+		if row, ok := l.byRun[envClaim.RunID]; ok && row.hookSSH() {
 			return Attribution{State: StateHookSSH, Claim: *envClaim, Via: "env"}
 		}
 		return Attribution{State: StateAttributed, Claim: *envClaim, Via: "env"}
 	case anc != nil:
-		if ancRow.Via == "hook-ssh" {
+		if ancRow.hookSSH() {
 			return Attribution{State: StateHookSSH, Claim: *anc, Via: "ancestry"}
 		}
 		return Attribution{State: StateAttributed, Claim: *anc, Via: "ancestry"}

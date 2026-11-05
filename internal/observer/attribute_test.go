@@ -12,7 +12,7 @@ const (
 )
 
 func row(run, task string) LedgerRow {
-	return LedgerRow{RunID: run, Task: task, Agent: "main", Ticket: "none", Session: "s", PID: 100, StartToken: "proc:1"}
+	return LedgerRow{RunID: run, Task: task, Agent: "main", Ticket: "none", Session: "s", PID: 100, StartToken: "proc:1", Attribution: "verified"}
 }
 
 func envFor(run, task string) map[string]string {
@@ -74,7 +74,7 @@ func TestAttributeIgnoresMalformedEnvAndNeverPicksOnConflict(t *testing.T) {
 func TestHookSSHNeverConflicts(t *testing.T) {
 	l := &Ledger{byRun: map[string]LedgerRow{}, byPID: map[ptKey]LedgerRow{}}
 	r := row(runA, "t-a")
-	r.Via = "hook-ssh"
+	r.Attribution = "hook-ssh"
 	l.Add(r)
 	a := l.Attribute(tree[300], envFor(runB, "t-b"), tree)
 	if a.State != StateHookSSH || a.Ancestry == nil || a.Task != "t-b" {
@@ -82,6 +82,18 @@ func TestHookSSHNeverConflicts(t *testing.T) {
 	}
 	if err := a.validate(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestUnverifiedRowsNeverAttribute(t *testing.T) {
+	for _, v := range []string{"unverified", "remote-unattributed", "remote-unwrapped", ""} {
+		l := &Ledger{byRun: map[string]LedgerRow{}, byPID: map[ptKey]LedgerRow{}}
+		r := row(runA, "t-a")
+		r.Attribution = v
+		l.Add(r)
+		if a := l.Attribute(tree[300], envFor(runA, "t-a"), tree); a.State != StateAttributed || a.Via != "env" {
+			t.Errorf("%q row must not count as ancestry or env-ledger evidence, got %+v", v, a)
+		}
 	}
 }
 
@@ -95,7 +107,7 @@ func TestAncestryTerminatesOnCycle(t *testing.T) {
 
 func TestLoadLedger(t *testing.T) {
 	dir := t.TempDir()
-	good := `{"run_id":"` + runA + `","task":"t","agent":"main","ticket":"none","session":"s","pid":100,"start_token":"proc:1"}`
+	good := `{"run_id":"` + runA + `","task":"t","agent":"main","ticket":"none","session":"s","pid":100,"start_token":"proc:1","attribution":"verified"}`
 	write := func(name, body string) {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
