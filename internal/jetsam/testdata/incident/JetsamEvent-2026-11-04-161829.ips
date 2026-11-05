@@ -1,0 +1,70 @@
+{"bug_type": "298", "timestamp": "2026-11-04 16:18:29.00 +0000", "os_version": "fixture 1.0", "incident_id": "00000000-0000-4000-8000-000000333400"}
+{
+  "product": "Mac-Fixture1,1",
+  "date": "2026-11-04 16:18:25.40 +0000",
+  "timeDelta": 333400,
+  "largestProcess": "Python",
+  "memoryStatus": {
+    "pageSize": 16384,
+    "uncompressed": 6328845,
+    "compressorSize": 316056,
+    "memoryPages": {
+      "active": 230586,
+      "wired": 227988,
+      "inactive": 228688,
+      "free": 2978,
+      "speculative": 1179,
+      "purgeable": 0
+    }
+  },
+  "processes": [
+    {
+      "pid": 10934,
+      "name": "Python",
+      "rpages": 4358144,
+      "age": 8856240000,
+      "coalition": 292,
+      "states": [
+        "active"
+      ],
+      "priority": 0
+    },
+    {
+      "pid": 4101,
+      "name": "ExampleEditor",
+      "rpages": 78643,
+      "age": 86400000000,
+      "coalition": 410,
+      "states": [],
+      "reason": "jettisoned"
+    },
+    {
+      "pid": 4102,
+      "name": "ExampleHelper",
+      "rpages": 26214,
+      "age": 21600000000,
+      "coalition": 411,
+      "states": [],
+      "reason": "idle-exit"
+    },
+    {
+      "pid": 4103,
+      "name": "ExampleBrowser",
+      "rpages": 52428,
+      "age": 172800000000,
+      "coalition": 412,
+      "states": [],
+      "reason": "vm-compressor-space-shortage"
+    },
+    {
+      "pid": 1,
+      "name": "launchd",
+      "rpages": 300,
+      "age": 2073600000000,
+      "coalition": 1,
+      "states": [
+        "active"
+      ]
+    }
+  ]
+}

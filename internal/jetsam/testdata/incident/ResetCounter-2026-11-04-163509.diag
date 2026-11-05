@@ -1,0 +1,6 @@
+{"bug_type": "115", "timestamp": "2026-11-04 16:35:09.00 +0000", "name": "Reset count", "incident_id": "00000000-0000-4000-8000-000000000115"}
+Incident Identifier: 00000000-0000-4000-8000-000000000115
+Date: 2026-11-04 16:35:09.86 +0000
+Reset count: 1
+Boot failure count: 0
+Boot faults: wdog,reset_in_1

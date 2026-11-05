@@ -44,6 +44,22 @@ type Config struct {
 	WatchPatternsExtra []string `json:"watch_patterns_extra"` // appended to watch_patterns
 	OrphanIgnoreExtra  []string `json:"orphan_ignore_extra"`  // appended to orphan_ignore
 
+	// Resource guard.
+	GuardMode           string   `json:"guard_mode"`               // "" = platform default
+	GuardClaudeVersions []string `json:"guard_claude_versions"`    // extra Claude versions kill may apply to
+	GuardNeverSignal    []string `json:"guard_never_signal"`       // added to the built-in list
+	GuardMinShare       float64  `json:"guard_min_share"`          // fraction of RAM, 0.05-1.0
+	GuardGroupRAMFrac   float64  `json:"guard_group_ram_fraction"` // D4 size, 0.25-1.5
+	GuardHeadroomFrac   float64  `json:"guard_headroom_frac"`      // P1 corroboration, 0.02-0.95
+	GuardP1HorizonS     int      `json:"guard_p1_horizon_s"`       // 5-120
+	RunCappedPaths      []string `json:"run_capped_paths"`         // empty = no sidecar is honoured
+	AlertProcGB         float64  `json:"alert_proc_gb"`
+	AlertGrowthGBPerMin float64  `json:"alert_growth_gb_per_min"`
+	AlertSwapGB         float64  `json:"alert_swap_gb"`
+	AlertChromeHelpers  int      `json:"alert_chrome_helpers"`
+	ResourcesEveryS     int      `json:"resources_every_s"`
+	HotAlways           bool     `json:"hot_always"` // test daemon only
+
 	// Compiled forms, filled by Compile.
 	Watch  []*regexp.Regexp `json:"-"`
 	Ignore []*regexp.Regexp `json:"-"`
@@ -107,8 +123,18 @@ func Default() Config {
 		Notify:          true,
 		NotifyCooldownS: 600,
 		MaxLogMB:        20,
-		WatchPatterns:   append([]string(nil), commonWatch...),
-		OrphanIgnore:    append([]string(nil), commonIgnore...),
+
+		GuardMinShare:       0.25,
+		GuardGroupRAMFrac:   0.75,
+		GuardHeadroomFrac:   0.08,
+		GuardP1HorizonS:     15,
+		AlertProcGB:         8,
+		AlertGrowthGBPerMin: 2,
+		AlertSwapGB:         10,
+		AlertChromeHelpers:  60,
+		ResourcesEveryS:     10,
+		WatchPatterns:       append([]string(nil), commonWatch...),
+		OrphanIgnore:        append([]string(nil), commonIgnore...),
 	}
 }
 
@@ -126,7 +152,18 @@ func DefaultPath() string {
 // patterns. Problems that still leave a usable config are returned as
 // warnings so a typo never stops the monitor; a malformed file is an error
 // and the caller decides whether to fall back to defaults.
-func Load(path string) (Config, []string, error) {
+func Load(path string) (Config, []string, error) { return LoadOpts(path, Options{}) }
+
+// Options changes how a config is read.
+type Options struct {
+	// TestDaemon honours hot_always. Without it the key is ignored with a
+	// warning. (The test daemon's target is the job it spawns itself, never
+	// a config value.)
+	TestDaemon bool
+}
+
+// LoadOpts is Load with Options.
+func LoadOpts(path string, opt Options) (Config, []string, error) {
 	cfg := Default()
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -136,11 +173,14 @@ func Load(path string) (Config, []string, error) {
 	if err != nil {
 		return cfg, nil, fmt.Errorf("read config: %w", err)
 	}
-	return Parse(data)
+	return ParseOpts(data, opt)
 }
 
-// Parse overlays JSON data on the defaults.
-func Parse(data []byte) (Config, []string, error) {
+// Parse overlays JSON data on the defaults (not a test daemon).
+func Parse(data []byte) (Config, []string, error) { return ParseOpts(data, Options{}) }
+
+// ParseOpts overlays JSON data on the defaults.
+func ParseOpts(data []byte, opt Options) (Config, []string, error) {
 	cfg := Default()
 	var warnings []string
 	if len(bytes.TrimSpace(data)) == 0 {
@@ -167,6 +207,7 @@ func Parse(data []byte) (Config, []string, error) {
 		return w, w.Compile(), fmt.Errorf("parse config: %w", err)
 	}
 	warnings = append(warnings, cfg.validate()...)
+	warnings = append(warnings, cfg.testOnly(opt)...)
 	warnings = append(warnings, cfg.Compile()...)
 	return cfg, warnings, nil
 }
@@ -211,7 +252,74 @@ func (c *Config) validate() []string {
 	clampF("degraded_loss_pct", &c.DegradedLossPct, 0, d.DegradedLossPct)
 	clampF("new_app_min_kbps", &c.NewAppMinKbps, 0, d.NewAppMinKbps)
 	clampF("runaway_cpu_pct", &c.RunawayCPUPct, 0, d.RunawayCPUPct)
+	w = append(w, c.validateGuard()...)
 	return w
+}
+
+// guardModes are the accepted guard_mode values ("" means the platform default).
+var guardModes = map[string]bool{"": true, "off": true, "alert": true, "pause": true, "pause+kill": true}
+
+// validateGuard clamps the guard thresholds into their bounds (a value out
+// of bounds is moved to the nearest bound, not reset) and fixes bad values.
+func (c *Config) validateGuard() []string {
+	d := Default()
+	var w []string
+	clampF := func(name string, v *float64, lo, hi float64) {
+		switch {
+		case *v != *v: // NaN
+			w = append(w, fmt.Sprintf("config: %s is not a number; using %g", name, lo))
+			*v = lo
+		case *v < lo:
+			w = append(w, fmt.Sprintf("config: %s=%g below %g; clamped to %g", name, *v, lo, lo))
+			*v = lo
+		case *v > hi:
+			w = append(w, fmt.Sprintf("config: %s=%g above %g; clamped to %g", name, *v, hi, hi))
+			*v = hi
+		}
+	}
+	clampF("guard_min_share", &c.GuardMinShare, 0.05, 1.0)
+	clampF("guard_group_ram_fraction", &c.GuardGroupRAMFrac, 0.25, 1.5)
+	clampF("guard_headroom_frac", &c.GuardHeadroomFrac, 0.02, 0.95)
+	if c.GuardP1HorizonS < 5 || c.GuardP1HorizonS > 120 {
+		old := c.GuardP1HorizonS
+		if old < 5 {
+			c.GuardP1HorizonS = 5
+		} else {
+			c.GuardP1HorizonS = 120
+		}
+		w = append(w, fmt.Sprintf("config: guard_p1_horizon_s=%d out of bounds 5-120; clamped to %d", old, c.GuardP1HorizonS))
+	}
+	if !guardModes[c.GuardMode] {
+		w = append(w, fmt.Sprintf("config: guard_mode %q is not off, alert, pause or pause+kill; using the platform default", c.GuardMode))
+		c.GuardMode = ""
+	}
+	posF := func(name string, v *float64, def float64) {
+		if !(*v > 0) {
+			w = append(w, fmt.Sprintf("config: %s=%g must be positive; using %g", name, *v, def))
+			*v = def
+		}
+	}
+	posF("alert_proc_gb", &c.AlertProcGB, d.AlertProcGB)
+	posF("alert_growth_gb_per_min", &c.AlertGrowthGBPerMin, d.AlertGrowthGBPerMin)
+	posF("alert_swap_gb", &c.AlertSwapGB, d.AlertSwapGB)
+	if c.AlertChromeHelpers < 1 {
+		w = append(w, fmt.Sprintf("config: alert_chrome_helpers=%d below 1; using %d", c.AlertChromeHelpers, d.AlertChromeHelpers))
+		c.AlertChromeHelpers = d.AlertChromeHelpers
+	}
+	if c.ResourcesEveryS < 1 {
+		w = append(w, fmt.Sprintf("config: resources_every_s=%d below 1; using %d", c.ResourcesEveryS, d.ResourcesEveryS))
+		c.ResourcesEveryS = d.ResourcesEveryS
+	}
+	return w
+}
+
+// testOnly drops the test-daemon keys unless the daemon is a test daemon.
+func (c *Config) testOnly(opt Options) []string {
+	if opt.TestDaemon || !c.HotAlways {
+		return nil
+	}
+	c.HotAlways = false
+	return []string{"config: hot_always is only honoured with --test-daemon; ignored"}
 }
 
 // Compile turns the pattern strings into regexps; invalid patterns are

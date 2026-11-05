@@ -16,6 +16,12 @@ for target in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64; d
 	[ "$os" = windows ] && bin=netwatch.exe
 	GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -trimpath \
 		-ldflags "-s -w -X main.version=$version" -o "$dir/$bin" ./cmd/netwatch
+	# A guardtest build (danger injection, test-daemon kill tier) must never
+	# ship. Check the binary's recorded build settings, whatever GOFLAGS was.
+	if go version -m "$dir/$bin" | grep -q -- '-tags=.*guardtest'; then
+		echo "build-release: $name was built with the guardtest tag; refusing" >&2
+		exit 1
+	fi
 	cp README.md LICENSE "$dir/"
 	if [ "$os" = windows ]; then
 		(cd "$out" && zip -qr "$name.zip" "$name")

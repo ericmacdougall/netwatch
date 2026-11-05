@@ -17,7 +17,9 @@ func xmlEscape(s string) string {
 
 // RenderPlist builds the LaunchAgent property list. stdout goes to
 // /dev/null because every event is already in events.jsonl; stderr keeps
-// collector errors in the log directory.
+// collector errors in the log directory. The memory guard must keep
+// polling while the host is under pressure, so the job is Interactive,
+// is not niced or IO-throttled, and restarts within 5s if it dies.
 func RenderPlist(o platform.ServiceOptions) string {
 	var args strings.Builder
 	for _, a := range append(append([]string{o.Exe}, o.Args...), "run") {
@@ -30,10 +32,8 @@ func RenderPlist(o platform.ServiceOptions) string {
 <key>ProgramArguments</key><array>` + args.String() + `</array>
 <key>RunAtLoad</key><true/>
 <key>KeepAlive</key><true/>
-<key>ThrottleInterval</key><integer>30</integer>
-<key>ProcessType</key><string>Background</string>
-<key>LowPriorityIO</key><true/>
-<key>Nice</key><integer>10</integer>
+<key>ThrottleInterval</key><integer>5</integer>
+<key>ProcessType</key><string>Interactive</string>
 <key>StandardOutPath</key><string>/dev/null</string>
 <key>StandardErrorPath</key><string>` + xmlEscape(path.Join(o.LogDir, "stderr.log")) + `</string>
 </dict></plist>

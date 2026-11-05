@@ -70,6 +70,20 @@ type Report struct {
 	Self        *SelfStats     `json:"self,omitempty"`
 	Counts      map[string]int `json:"counts"`
 	Events      []record.Event `json:"events"`
+	// Starts and Stops count daemon lifecycle events in the window. They are
+	// not network events, so they stay out of EventCount; without these a
+	// window holding only a restart reads as "0 events" and looks like lost data.
+	Starts int `json:"daemon_starts,omitempty"`
+	Stops  int `json:"daemon_stops,omitempty"`
+	// Resources is the memory summary. It is always present; with no
+	// resources.jsonl data it is {"samples": 0}.
+	Resources Resources `json:"resources"`
+}
+
+// WithResources adds the memory summary to r.
+func (r Report) WithResources(recs []ResRecord, evs []GuardEvent) Report {
+	r.Resources = Summarize(recs, evs)
+	return r
 }
 
 // maxTalkers is how many talkers a report lists.
@@ -144,7 +158,17 @@ func Build(since string, from time.Time, samples []record.Sample, events []recor
 		r.Self = &self
 	}
 	for _, e := range events {
-		if e.Event == record.Start || e.Event == record.Stop {
+		if e.Event == record.Start {
+			r.Starts++
+			continue
+		}
+		if e.Event == record.Stop {
+			r.Stops++
+			continue
+		}
+		// Memory and guard events are summarised under Resources; the
+		// network event list renders only the events it understands.
+		if IsMemoryEvent(e.Event) {
 			continue
 		}
 		r.Counts[e.Event]++
@@ -204,6 +228,9 @@ func (r Report) WriteText(w io.Writer) error {
 		}
 		b.WriteString("\n")
 	}
+	if r.Starts > 0 || r.Stops > 0 {
+		fmt.Fprintf(b, "  daemon: %d starts, %d stops (lifecycle events are not counted above)\n", r.Starts, r.Stops)
+	}
 	if r.Samples > 0 {
 		fmt.Fprintf(b, "  avg traffic: in %g kB/s, out %g kB/s\n", r.AvgInKBps, r.AvgOutKBps)
 	}
@@ -216,6 +243,7 @@ func (r Report) WriteText(w io.Writer) error {
 			fmt.Fprintf(b, "    %-38s %7g / %7g\n", procscan.Short(t.Proc, 38), t.InKBps, t.OutKBps)
 		}
 	}
+	r.Resources.writeMemory(b)
 	for _, e := range r.Events {
 		fmt.Fprintf(b, "  %s %-12s", e.TS, e.Event)
 		switch e.Event {

@@ -25,7 +25,7 @@ func lockRun(path string) (func(), error) {
 	err = windows.LockFileEx(windows.Handle(f.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, ol)
 	if err != nil {
 		f.Close()
-		return nil, fmt.Errorf("another netwatch is already running for %s", filepath.Dir(path))
+		return nil, fmt.Errorf("%w for %s", errLockHeld, filepath.Dir(path))
 	}
 	return func() { f.Close() }, nil
 }

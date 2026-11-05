@@ -5,7 +5,9 @@ netwatch is a small background monitor for developer machines. It answers two qu
 1. **Why is the network bad right now?** Every 10 seconds it pings the gateway and an internet host and records per-process traffic. When latency or loss gets bad it logs a `DEGRADED` event with the top talkers at that moment, so you can see what was saturating the link. It also notes each app that starts moving real traffic for the first time (`NEW_NET_APP`).
 2. **What is still running that should not be?** Every minute it looks for developer processes that were left behind: `node`, `vite`, `esbuild`, `wrangler`/`workerd`, Chrome helpers and headless Chrome, `chromedriver`, Playwright, Puppeteer, Electron, `Xvfb`, `crashpad_handler`, `rclone` and similar. A process is reported as an `ORPHAN` when it has lost the parent that started it and is older than a minimum age. It is reported as a `RUNAWAY` when it stays hot on CPU for several scans or passes a memory ceiling.
 
-netwatch never kills anything on its own. `netwatch orphans --kill` is opt-in, re-checks every process just before signalling it, and on macOS and Linux only sends `SIGTERM`.
+3. **What is eating memory, and which agent started it?** Every 10 seconds (every 2 seconds while memory is tight) it records memory pressure, the compressor, swap and the largest processes, with the app and, for Claude Code tool calls, the agent that launched them. It warns early: a process over 8 GB, growth over 2 GB a minute, memory pressure, swap over 10 GB, or more than 60 Chrome helpers. After a crash, `netwatch incident` joins macOS jetsam and reset reports with those samples.
+
+The orphan scanner never kills anything on its own. `netwatch orphans --kill` is opt-in, re-checks every process just before signalling it, and on macOS and Linux only sends `SIGTERM`. The one exception is the [memory guard](#memory-guard): on macOS, when the host itself is about to run out of memory, it pauses the Claude Code tool-call job that is causing it. On macOS it never kills (see [Modes](#memory-guard)). Turn it down to alerts with `netwatch guard alert`.
 
 It runs on macOS, Linux and Windows as a single static binary with one dependency, [`golang.org/x/sys`](https://pkg.go.dev/golang.org/x/sys) (BSD-3-Clause, from the Go project). On a laptop it averages about 1% of one CPU core, including the helper commands it runs, and about 13 MB of memory; see [Resource use](#resource-use).
 
@@ -69,6 +71,10 @@ netwatch [--config FILE] [--log-dir DIR] <command>
   report [--since 2h] [--json]
   orphans [--pid N,..] [--match RE] [--kill [--all]] [--force] [--json]
   tail [-n N] [--no-follow]
+  top [--mem|--cpu] [-n N] [--json]
+  incident [--last] [--json] [--since D] [--dir DIR] [--replay-guard]
+  guard off|alert|pause|pause+kill|status|verify-shape
+  resume PGID|--all
   install | uninstall | status [--label NAME]
   config                    print the effective configuration
   version
@@ -122,6 +128,12 @@ Events are appended to `events.jsonl` and echoed to stdout. Samples go to `sampl
 | `ORPHAN` | a watched process lost its parent (see below) and is older than `orphan_min_age_min` |
 | `RUNAWAY` | a watched process was at or above `runaway_cpu_pct` for `runaway_scans` consecutive scans (`reason: cpu`), or at or above `runaway_rss_mb` (`reason: rss`). Reported once per reason until it cools down or exits |
 | `ORPHANS_KILLED` | `orphans --kill` ran. `pids` lists the signalled processes and `results` gives each outcome |
+| `RESOURCE_ALERT` | an early-warning trigger fired: a process over 8 GB, growth over 2 GB/min, memory pressure warn or critical, swap over 10 GB, or more than 60 Chrome helpers. Rate-limited per condition |
+| `GUARD_PAUSE` / `GUARD_RESUME` / `GUARD_KILL` | the memory guard paused, resumed or killed an agent job; the event names the danger signals, the group and the agent |
+| `HOST_AT_RISK_UNPROTECTED` | memory is in danger but the cause is something the guard may not touch (another app, another user, an excluded process); it alerts and signals nothing |
+| `MODE_CHANGE` | `netwatch guard MODE` changed the guard mode; the event says who changed it |
+| `INCIDENT` | at start, netwatch found that the previous run ended without a clean `STOP` and the host reset or the service died |
+| `ALLOWLIST_CHANGE` | the shape check verified a new Claude Code version for kill eligibility |
 
 All rates are kilobytes per second (`kB/s`). Every sample also has a `self` field with netwatch's own CPU percentage, which includes the helper commands it runs, and its memory use.
 
@@ -173,6 +185,55 @@ The file only needs the keys you change. A missing file means all defaults. Unkn
 
 Each log file is rotated to `<name>.1` when it passes `max_log_mb`, and only one old generation is kept.
 
+## Memory guard
+
+The guard protects the host, not individual jobs. It has no per-job size or growth caps: a large job on a healthy machine is never touched. It acts only when the machine itself is in danger, and then escalates in three steps:
+
+1. **Alert.** A `RESOURCE_ALERT` or `HOST_AT_RISK_UNPROTECTED` event and a notification name the process, its app and the agent that launched it.
+2. **Pause.** The agent job that is causing the danger is stopped with `SIGSTOP`. A paused job keeps all its memory and work. It is resumed with `SIGCONT` once memory pressure has been normal for 30 seconds, after at most 30 minutes if pressure is no longer critical, or after 2 hours regardless. Resume it yourself with `netwatch resume PGID` or `netwatch resume --all`. A group you resume by hand is not paused or killed again during the same danger episode; alerts continue. A resume during the kill stage cancels the kill for that group. Resume trade-off: if a recorded process still exists but its start time cannot be read, `SIGCONT` is sent without the identity check (resuming cannot harm a process, and refusing could leave a stopped job frozen); stop, term and kill are never sent in that case. While the daemon runs, `resume` continues the group at once and the daemon updates its records on its next poll.
+3. **Kill** (Linux only; never on macOS, see below), only as a last resort, only in `pause+kill` mode, and only when the paused job is the proven cause: critical pressure for a full minute after the pause, or the memory compressor at 95% or more. The job gets `SIGTERM`, then `SIGKILL` 5 seconds later. If netwatch restarts in a mode that cannot kill while a kill is under way, the job is resumed instead of getting `SIGKILL`.
+
+If netwatch cannot read the system's memory state, it takes no new action, but the 30 minute and 2 hour limits still resume a paused job.
+
+**Danger** means one of: critical memory pressure; the compressor at 85% of its limit or more; swap at 85% of swap plus free disk; one agent group at 75% of RAM and growing over 1 GB a minute; or a group whose growth would use the remaining memory within 15 seconds, confirmed by one of the other signals.
+
+**Modes.** `netwatch guard off|alert|pause|pause+kill` takes effect within one poll, logs `MODE_CHANGE` with who changed it, and sends a notification. Switching to `off` or `alert` resumes everything the guard paused. The defaults are `pause` on macOS, `alert` on Linux and `off` on Windows. **macOS is pause-only.** Kill requires every process in the job to show `CLAUDECODE=1` in its own environment, and macOS does not let other processes read the environment of system binaries such as `/bin/zsh`, which runs every Bash tool call. So kill can never fire there, even in `pause+kill` mode, and `netwatch guard status` says "kill unavailable on macOS: environment of system binaries not readable". The check is not relaxed: a paused job keeps its memory and work, so pausing is the safer action anyway. `netwatch guard status` prints the mode and thresholds. To turn the guard down to alerts only:
+
+```sh
+netwatch guard alert
+```
+
+**What it may touch.** Only Claude Code tool-call jobs: the process group of a shell that Claude Code started for a Bash tool call, including jobs backgrounded with `&` or `nohup`. Kill also requires that the job's own environment confirms its Claude Code parent and that the Claude Code version has passed the shape check (`netwatch guard verify-shape`). Jobs that only look like agent jobs (`CLAUDECODE` set, no terminal), and the leftovers of a short-lived Claude Code child that exited before netwatch could classify it, can be paused but never killed.
+
+**What it never touches:** Claude Code itself and its MCP servers; anything in a terminal, `tmux` or `screen`; other apps (Chrome, editors, …); other users' processes and system processes; virtual machines, containers and databases (`qemu`, `limactl`, `colima`, `vfkit`, `docker`, `VirtualBox`, `postgres`, `mysqld`, `redis-server`, `mongod`; `guard_never_signal` in the config adds names to this list and cannot remove any). When one of these is the cause, the guard only alerts.
+
+**Codex and other agent harnesses get alerts only.** They move to guarded once their process shape has been verified live.
+
+**Declared budgets.** A job started through the harness `run_capped` wrapper with a declared memory budget is paused last and never killed while it stays within that budget.
+
+**Wall-clock timer warning.** Pausing a job does not pause the clock of whatever is waiting for it. A foreground Bash tool call has its own timeout, so Claude Code may kill a paused job when that timeout expires, and the agent may retry the same command. Guard events are also written to `guard-events.jsonl` in netwatch's state directory, without command text, so harness hooks can warn the agent.
+
+**Limits.** The guard polls; it cannot outrun an allocation of several GB per second. On 2026-11-04 a Python process grew to 65 GB in about 11 seconds on a 16 GB Mac. Replayed against that incident, the guard would have paused it within about 2 seconds of the first danger signal, well before the host reset 27 minutes later, but after macOS had already started killing other apps. A paused job stops growing, so the guard prevents the host reset; it does not prevent the first jetsam kills on very fast allocations. Validating input (never point a reader at an endless stream) is the first line of defence.
+
+**Rollback.** To turn the guard off and return to the previous version:
+
+```sh
+netwatch resume --all     # resume anything the guard paused (refuses if no state file exists, i.e. nothing was ever paused: then skip it)
+netwatch guard alert      # stop pausing and killing
+# then reinstall the previous release binary and run: netwatch install
+```
+
+`netwatch uninstall` also resumes every paused group before removing the service.
+
+**If the guard state is lost.** netwatch records every job it pauses in a state file before it signals it. If that file is corrupt or unreadable, netwatch adopts nothing and sends a loud alert listing the stopped processes it found, and `netwatch resume --all` cannot work because there is no record to resume from. List your stopped processes and resume the ones netwatch paused one at a time:
+
+```sh
+netwatch resume --all --check --force   # lists your stopped processes
+netwatch resume --pid PID               # resumes one of them (your own processes only)
+```
+
+Some of the listed processes may have been stopped by you (for example with Ctrl-Z), not by netwatch. A missing state file on a first run is normal and is only logged.
+
 ## Privacy
 
 - **Everything stays on your machine.** netwatch has no telemetry and makes no network connections except the ICMP pings to your gateway and to `internet_host`.
@@ -196,6 +257,7 @@ Each log file is rotated to `<name>.1` when it passes `max_log_mb`, and only one
 - An installed browser's `chrome_crashpad_handler` always detaches to `launchd`, so it is ignored by default. Handlers from Playwright or Puppeteer browser caches are still reported.
 - Processes are read with `ps`. `ps` CPU is a decaying average, not an exact per-interval figure.
 - Only IPv4 default routes are used to find the gateway.
+- The memory guard pauses but never kills: the environment of system binaries such as `/bin/zsh` is not readable by other processes, and kill requires it. The session id of a tool-call job is read from a member that is not a system binary, such as `python3`; a job made only of system binaries has no session or agent label.
 
 ### Linux
 
@@ -222,7 +284,7 @@ Each log file is rotated to `<name>.1` when it passes `max_log_mb`, and only one
 
 ## Resource use
 
-netwatch runs with lowered CPU and I/O priority on macOS and Linux (normal priority on Windows, where a below-normal monitor was starved for tens of seconds on a busy machine). Each sample's `self` field records what it costs, including the helper commands it starts, and `netwatch report` summarises it.
+netwatch runs at normal priority on macOS (the memory guard must keep polling while the host is under memory pressure, so the LaunchAgent is `Interactive` and restarts within 5 seconds), with lowered CPU and I/O priority on Linux, and at normal priority on Windows (a below-normal monitor was starved for tens of seconds on a busy machine). Each sample's `self` field records what it costs, including the helper commands it starts, and `netwatch report` summarises it.
 
 Measured on an Apple M5 laptop (10 cores, macOS 26), with the installed LaunchAgent at default settings for 30 minutes, about 800 processes, and 1–4 MB/s of traffic:
 

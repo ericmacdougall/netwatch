@@ -1,0 +1,5 @@
+{"ts":"2026-11-04T16:06:30Z","pressure":"normal","compressor_pct":4,"top_mem":[{"pid":2001,"name":"ExampleBrowser","footprint":2000000000,"agent":"","confidence":""}]}
+{"ts":"2026-11-04T16:06:44Z","pressure":"normal","compressor_pct":4,"top_mem":[{"pid":10934,"pgid":10934,"name":"Python","footprint":2147483648,"agent":"agent-fixture","confidence":"medium"}]}
+{"ts":"2026-11-04T16:06:50Z","pressure":"warn","compressor_pct":9,"top_mem":[{"pid":10934,"pgid":10934,"name":"Python","footprint":44023414784,"agent":"agent-fixture","confidence":"medium"}]}
+{"ts":"2026-11-04T16:06:52Z","pressure":"critical","compressor_pct":30,"top_mem":[{"pid":10934,"pgid":10934,"name":"Python","footprint":60129542144,"agent":"agent-fixture","confidence":"medium"}]}
+{"ts":"2026-11-04T16:06:5
