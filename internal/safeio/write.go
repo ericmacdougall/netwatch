@@ -29,7 +29,7 @@ func openPrivateDir(dir string) (*os.File, error) {
 		d.Close()
 		return nil, fmt.Errorf("%w: %s is not a directory", ErrNotRegular, dir)
 	}
-	if err := checkOwnerPerm(fi, Opts{RequireOwner: true, MaxPerm: 0o700}); err != nil {
+	if err := checkOwnerPerm(d, fi, Opts{RequireOwner: true, MaxPerm: 0o700}); err != nil {
 		d.Close()
 		return nil, fmt.Errorf("%w: %s", err, dir)
 	}
@@ -105,7 +105,7 @@ func OpenAppend(path string) (*os.File, error) {
 		err = fmt.Errorf("%w: %s", ErrNotRegular, path)
 	}
 	if err == nil {
-		if e := checkOwnerPerm(fi, Opts{RequireOwner: true}); e != nil {
+		if e := checkOwnerPerm(f, fi, Opts{RequireOwner: true}); e != nil {
 			err = fmt.Errorf("%w: %s", e, path)
 		}
 	}
