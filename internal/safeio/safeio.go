@@ -37,6 +37,9 @@ const MaxJSONDepth = 64
 // a FIFO, then validates the descriptor itself (not the path) so there is no
 // check-then-use race. The caller closes the file.
 func openRegular(path string, o Opts) (*os.File, os.FileInfo, error) {
+	if err := refuseLink(path); err != nil {
+		return nil, nil, err
+	}
 	f, err := os.OpenFile(path, readFlags, 0)
 	if err != nil {
 		if isSymlinkLoop(err) {

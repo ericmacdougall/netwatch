@@ -51,4 +51,7 @@ func checkOwnerPerm(_ *os.File, fi os.FileInfo, o Opts) error {
 	return nil
 }
 
+// refuseLink is a no-op: O_NOFOLLOW already refuses a final symlink.
+func refuseLink(string) error { return nil }
+
 func syncDir(d *os.File) error { return d.Sync() }

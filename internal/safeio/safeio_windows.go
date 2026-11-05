@@ -21,6 +21,16 @@ const (
 
 func isSymlinkLoop(error) bool { return false }
 
+// refuseLink rejects a final symlink. Windows has no O_NOFOLLOW, so the path
+// is checked before the open; unlike the unix flag this is not atomic, but
+// the directory is private to the user.
+func refuseLink(path string) error {
+	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%w: %s is a symlink", ErrNotRegular, path)
+	}
+	return nil
+}
+
 func syncDir(*os.File) error { return nil }
 
 // writeMask is every access right that lets a principal change the file or
