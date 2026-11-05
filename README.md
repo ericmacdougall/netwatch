@@ -190,7 +190,7 @@ Each log file is rotated to `<name>.1` when it passes `max_log_mb`, and only one
 The guard protects the host, not individual jobs. It has no per-job size or growth caps: a large job on a healthy machine is never touched. It acts only when the machine itself is in danger, and then escalates in three steps:
 
 1. **Alert.** A `RESOURCE_ALERT` or `HOST_AT_RISK_UNPROTECTED` event and a notification name the process, its app and the agent that launched it.
-2. **Pause.** The agent job that is causing the danger is stopped with `SIGSTOP`. A paused job keeps all its memory and work. It is resumed with `SIGCONT` once memory pressure has been normal for 30 seconds, after at most 30 minutes if pressure is no longer critical, or after 2 hours regardless. Resume it yourself with `netwatch resume PGID` or `netwatch resume --all`. A group you resume by hand is not paused or killed again during the same danger episode; alerts continue. A resume during the kill stage cancels the kill for that group. While the daemon runs, `resume` continues the group at once and the daemon updates its records on its next poll.
+2. **Pause.** The agent job that is causing the danger is stopped with `SIGSTOP`. A paused job keeps all its memory and work. It is resumed with `SIGCONT` once memory pressure has been normal for 30 seconds, after at most 30 minutes if pressure is no longer critical, or after 2 hours regardless. Resume it yourself with `netwatch resume PGID` or `netwatch resume --all`. A group you resume by hand is not paused or killed again during the same danger episode; alerts continue. A resume during the kill stage cancels the kill for that group. Resume trade-off: if a recorded process still exists but its start time cannot be read, `SIGCONT` is sent without the identity check (resuming cannot harm a process, and refusing could leave a stopped job frozen); stop, term and kill are never sent in that case. While the daemon runs, `resume` continues the group at once and the daemon updates its records on its next poll.
 3. **Kill** (Linux only; never on macOS, see below), only as a last resort, only in `pause+kill` mode, and only when the paused job is the proven cause: critical pressure for a full minute after the pause, or the memory compressor at 95% or more. The job gets `SIGTERM`, then `SIGKILL` 5 seconds later. If netwatch restarts in a mode that cannot kill while a kill is under way, the job is resumed instead of getting `SIGKILL`.
 
 If netwatch cannot read the system's memory state, it takes no new action, but the 30 minute and 2 hour limits still resume a paused job.
@@ -218,7 +218,7 @@ netwatch guard alert
 **Rollback.** To turn the guard off and return to the previous version:
 
 ```sh
-netwatch resume --all     # resume anything the guard paused
+netwatch resume --all     # resume anything the guard paused (refuses if no state file exists, i.e. nothing was ever paused: then skip it)
 netwatch guard alert      # stop pausing and killing
 # then reinstall the previous release binary and run: netwatch install
 ```

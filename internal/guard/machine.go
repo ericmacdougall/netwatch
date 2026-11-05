@@ -216,7 +216,11 @@ func (m *Machine) Step(s Snapshot) []Action {
 			return nil
 		}
 		blind := Snapshot{At: s.At} // pressure unknown: never "still critical"
-		acts := m.maxPause(blind, buildView(blind))
+		v := buildView(blind)
+		acts := m.maxPause(blind, v)
+		if !m.cfg.Mode.canPause() { // off or alert: nothing may stay paused
+			acts = append(acts, m.resumeAll(s.At, "mode "+string(m.cfg.Mode), v)...)
+		}
 		if len(acts) > 0 {
 			m.dirty = true
 		}

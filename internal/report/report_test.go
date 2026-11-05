@@ -121,3 +121,27 @@ func TestBuildRedactsLegacyRecords(t *testing.T) {
 		t.Fatalf("report kept a secret or control character: %q", got)
 	}
 }
+
+// A window holding only daemon restarts must say so, not just "0 events".
+func TestReportShowsDaemonLifecycle(t *testing.T) {
+	evs := []record.Event{
+		{TS: "2026-11-04T13:57:06-07:00", Event: record.Start},
+		{TS: "2026-11-04T13:57:18-07:00", Event: record.Stop},
+		{TS: "2026-11-04T13:57:26-07:00", Event: record.Start},
+	}
+	r := Build("1h", time.Now(), nil, evs)
+	if r.Starts != 2 || r.Stops != 1 || r.EventCount != 0 {
+		t.Fatalf("starts %d stops %d events %d", r.Starts, r.Stops, r.EventCount)
+	}
+	var sb strings.Builder
+	if err := r.WriteText(&sb); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sb.String(), "daemon: 2 starts, 1 stops") {
+		t.Fatalf("text lacks the lifecycle line:\n%s", sb.String())
+	}
+	b, _ := json.Marshal(r)
+	if !strings.Contains(string(b), `"daemon_starts":2`) {
+		t.Fatalf("json lacks daemon_starts: %s", b)
+	}
+}

@@ -144,3 +144,35 @@ func TestAppendTightensExistingPermissions(t *testing.T) {
 		}
 	}
 }
+
+// One file can mix offsets (local lifecycle events, UTC "Z" resource
+// alerts); the cutoff is an instant, so all in-window rows match whatever
+// the offset and none outside it do.
+func TestReadSinceMixedOffsets(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	now := time.Now()
+	in := now.Add(-20 * time.Minute)
+	out := now.Add(-3 * time.Hour)
+	mst := time.FixedZone("MST", -7*3600)
+	lines := []string{
+		`{"ts":"` + in.In(mst).Format(TimeFormat) + `","n":1}`,
+		`{"ts":"` + in.UTC().Format(TimeFormat) + `","n":2}`,
+		`{"ts":"` + in.In(time.FixedZone("E", 5*3600+1800)).Format(TimeFormat) + `","n":3}`,
+		`{"ts":"` + out.In(mst).Format(TimeFormat) + `","n":4}`,
+		`{"ts":"` + out.UTC().Format(TimeFormat) + `","n":5}`,
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadSince(path, now.Add(-time.Hour), tsOf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ns []int
+	for _, r := range got {
+		ns = append(ns, r.N)
+	}
+	if want := []int{1, 2, 3}; !reflect.DeepEqual(ns, want) {
+		t.Fatalf("got %v, want %v", ns, want)
+	}
+}

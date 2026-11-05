@@ -418,3 +418,32 @@ func TestDetectorUsesConfiguredDanger(t *testing.T) {
 		t.Fatalf("nil Danger: %+v, want defaults", l.det.Cfg)
 	}
 }
+
+// Switching to off while system reads keep failing must still release the
+// paused group and log the change (review low: Tick returned before the
+// mode change was applied).
+func TestModeOffWhileReadsFailResumesPausedGroup(t *testing.T) {
+	f := newFake()
+	f.sys = critical
+	f.add(100, 1, 100, 12*gib, gib)
+	h := newHarness(t, f, guard.ModePause, fixedClassifier{tool: []int{100}}, nil)
+	h.run(3 * time.Minute)
+	if !h.stopped(100) {
+		t.Fatalf("setup: group not paused: %v", h.sigs)
+	}
+	f.sysErr = errors.New("sysctl failed")
+	h.loop.d.Mode = func() (guard.Mode, bool) { return guard.ModeOff, true }
+	h.run(30 * time.Second)
+	cont := false
+	for _, s := range h.sigs {
+		if s.pid == 100 && s.s == syscall.SIGCONT {
+			cont = true
+		}
+	}
+	if !cont {
+		t.Fatalf("group still paused after mode off with failing reads: %v", h.sigs)
+	}
+	if h.m.Mode() != guard.ModeOff || !h.ev.has("MODE_CHANGE") {
+		t.Fatalf("mode = %s, MODE_CHANGE logged = %v", h.m.Mode(), h.ev.has("MODE_CHANGE"))
+	}
+}

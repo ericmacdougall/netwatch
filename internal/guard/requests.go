@@ -3,6 +3,7 @@ package guard
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -29,6 +30,31 @@ type DirRequests struct{ Dir string }
 
 const reqPrefix = "resume-"
 
+// maxScanNames bounds how many directory entries one Take or Clear pass
+// examines, and maxTake bounds the requests one Take returns. The dir is
+// private (our uid only), but an unbounded ReadDir would still let a
+// runaway writer make every poll allocate without limit. Leftovers are
+// picked up by the next poll or the next Clear round.
+const (
+	maxScanNames = 4096
+	maxTake      = 256
+	maxClearRnds = 16
+)
+
+// listNames returns at most max entry names of dir, in directory order.
+func listNames(dir string, max int) ([]string, error) {
+	f, err := os.Open(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	names, err := f.Readdirnames(max)
+	if errors.Is(err, io.EOF) {
+		err = nil
+	}
+	return names, err
+}
+
 // Add implements ResumeRequests.
 func (d DirRequests) Add(key string) error {
 	if !strings.HasPrefix(key, "pg:") {
@@ -42,7 +68,7 @@ func (d DirRequests) Add(key string) error {
 // removed and skipped: a request is only ever a key the daemon looks up
 // in its own records.
 func (d DirRequests) Take() ([]string, error) {
-	ents, err := os.ReadDir(d.Dir)
+	names, err := listNames(d.Dir, maxScanNames)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
@@ -50,11 +76,14 @@ func (d DirRequests) Take() ([]string, error) {
 		return nil, err
 	}
 	var keys []string
-	for _, e := range ents {
-		if !strings.HasPrefix(e.Name(), reqPrefix) {
+	for _, n := range names {
+		if !strings.HasPrefix(n, reqPrefix) {
 			continue
 		}
-		p := filepath.Join(d.Dir, e.Name())
+		if len(keys) >= maxTake {
+			break
+		}
+		p := filepath.Join(d.Dir, n)
 		b, rerr := safeio.ReadFile(p, safeio.Opts{Max: 128, RequireOwner: true, MaxPerm: 0o600})
 		_ = os.Remove(p)
 		if rerr == nil && strings.HasPrefix(string(b), "pg:") {
@@ -68,21 +97,31 @@ func (d DirRequests) Take() ([]string, error) {
 // Only safe while no daemon can take requests (the caller holds run.lock):
 // with no daemon, a pending request has no reader.
 func (d DirRequests) Clear() error {
-	ents, err := os.ReadDir(d.Dir)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	for _, e := range ents {
-		n := e.Name()
-		if strings.HasPrefix(n, reqPrefix) ||
-			(strings.HasPrefix(n, "."+reqPrefix) && strings.Contains(n, ".tmp-")) {
-			if rerr := os.Remove(filepath.Join(d.Dir, n)); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
-				err = rerr
+	var last error
+	for round := 0; round < maxClearRnds; round++ {
+		names, err := listNames(d.Dir, maxScanNames)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		removed := 0
+		last = nil
+		for _, n := range names {
+			if strings.HasPrefix(n, reqPrefix) ||
+				(strings.HasPrefix(n, "."+reqPrefix) && strings.Contains(n, ".tmp-")) {
+				rerr := os.Remove(filepath.Join(d.Dir, n))
+				if rerr == nil {
+					removed++
+				} else if !errors.Is(rerr, fs.ErrNotExist) {
+					last = rerr
+				}
 			}
 		}
+		if removed == 0 || len(names) < maxScanNames {
+			break
+		}
 	}
-	return err
+	return last
 }
