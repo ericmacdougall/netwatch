@@ -213,15 +213,6 @@ func rd(sec float64, bytes uint64, growth float64, p resources.Level, comp float
 		Pressure: p, CompressorFrac: comp, Eligible: true}
 }
 
-func kills(as []Action) bool {
-	for _, a := range as {
-		if a.Kind == ActSigterm {
-			return true
-		}
-	}
-	return false
-}
-
 func feed(d *ReplayRules, rs ...Reading) (killed bool, path string) {
 	for _, r := range rs {
 		for _, a := range d.Poll(r) {

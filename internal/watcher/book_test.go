@@ -13,7 +13,6 @@ type world struct {
 	now   time.Time
 	procs map[int]resources.Proc
 	exe   map[int]string
-	scanN int
 }
 
 func newWorld() *world {
