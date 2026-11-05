@@ -1,5 +1,3 @@
-//go:build !windows
-
 package guard
 
 import (
@@ -97,14 +95,14 @@ func TestKillPathATooFewPollsNoKill(t *testing.T) {
 func TestKillOnlyInPauseKillMode(t *testing.T) {
 	r := killRig(t, ModePause)
 	r.run(80, 2*time.Second, crit)
-	must(t, r.w.count(syscall.SIGTERM) == 0 && r.w.count(syscall.SIGKILL) == 0, "pause mode must never kill")
+	must(t, r.w.count(sigTERM) == 0 && r.w.count(sigKILL) == 0, "pause mode must never kill")
 	must(t, r.paused(100), "the group stays paused")
 }
 
 func TestD4OrP1AloneFor10MinutesPausesNeverKills(t *testing.T) {
 	r := killRig(t, ModePauseKill)
 	r.run(300, 2*time.Second, warn) // 10 minutes of warn: no critical, no 95% level
-	must(t, r.w.count(syscall.SIGTERM) == 0, "D4 alone must never kill")
+	must(t, r.w.count(sigTERM) == 0, "D4 alone must never kill")
 	must(t, r.paused(100), "D4 alone pauses and holds")
 }
 
@@ -116,7 +114,7 @@ func TestD1ClearD1NoKill(t *testing.T) {
 	r.run(14, 5*time.Second, normal) // clear and resume
 	must(t, r.rec(100) == nil, "setup: resumed")
 	r.run(20, 2*time.Second, crit) // 40s critical again
-	must(t, r.w.count(syscall.SIGTERM) == 0 && r.w.count(syscall.SIGKILL) == 0, "two 40s episodes must not add up to a kill")
+	must(t, r.w.count(sigTERM) == 0 && r.w.count(sigKILL) == 0, "two 40s episodes must not add up to a kill")
 }
 
 func TestKillSequenceOrderAndSurvivors(t *testing.T) {
@@ -128,20 +126,20 @@ func TestKillSequenceOrderAndSurvivors(t *testing.T) {
 	// SIGTERM is delivered while stopped, then SIGCONT, then (5s later) SIGKILL.
 	idx := func(sig syscall.Signal, pid int) int {
 		for i, l := range r.w.log {
-			if l.pid == pid && l.sig == sig && (sig != syscall.SIGSTOP || true) {
+			if l.pid == pid && l.sig == sig && (sig != sigSTOP || true) {
 				return i
 			}
 		}
 		return -1
 	}
-	must(t, idx(syscall.SIGTERM, 100) > idx(syscall.SIGSTOP, 100), "TERM after STOP")
-	must(t, idx(syscall.SIGCONT, 100) > idx(syscall.SIGTERM, 101), "CONT after every TERM")
+	must(t, idx(sigTERM, 100) > idx(sigSTOP, 100), "TERM after STOP")
+	must(t, idx(sigCONT, 100) > idx(sigTERM, 101), "CONT after every TERM")
 	must(t, r.w.procs[100].dead, "pid 100 took the pending SIGTERM on SIGCONT")
 	must(t, !r.w.procs[101].dead && !r.w.procs[101].stopped, "pid 101 ignores TERM and now runs")
-	must(t, r.w.count(syscall.SIGKILL) == 0, "no SIGKILL before 5s")
+	must(t, r.w.count(sigKILL) == 0, "no SIGKILL before 5s")
 	r.poll(2*time.Second, crit)
 	r.poll(2*time.Second, crit)
-	must(t, r.w.count(syscall.SIGKILL) == 0, "no SIGKILL at +4s")
+	must(t, r.w.count(sigKILL) == 0, "no SIGKILL at +4s")
 	r.poll(2*time.Second, crit)
 	killAt, ok := r.first(ActKill, 100)
 	must(t, ok && killAt.Sub(termAt) >= 5*time.Second && killAt.Sub(termAt) <= 6*time.Second, "SIGKILL at +%v", killAt.Sub(termAt))
@@ -238,7 +236,7 @@ func TestShutdownDuringEachKillPhaseLeavesNothingStopped(t *testing.T) {
 	rc.TermAt = b.at
 	b.m.mu.Unlock()
 	for _, pid := range []int{100, 101} {
-		must(t, b.w.Signal(pid, b.w.procs[pid].start, syscall.SIGTERM) == nil, "term")
+		must(t, b.w.Signal(pid, b.w.procs[pid].start, sigTERM) == nil, "term")
 		b.m.markSig(key, pid, false, true)
 	}
 	must(t, !b.noneStopped(), "setup: members stopped")
@@ -303,7 +301,7 @@ func TestNonKillableTiersArePausedNeverKilled(t *testing.T) {
 		}
 		must(t, r.paused(100), "%s: must be paused", name)
 		r.run(120, 2*time.Second, crit)
-		must(t, r.w.count(syscall.SIGTERM) == 0 && r.w.count(syscall.SIGKILL) == 0, "%s: must never be killed", name)
+		must(t, r.w.count(sigTERM) == 0 && r.w.count(sigKILL) == 0, "%s: must never be killed", name)
 		must(t, r.paused(100), "%s: stays paused", name)
 	}
 }
@@ -319,7 +317,7 @@ func TestWithinBudgetGroupIsPausedLastAndNeverKilled(t *testing.T) {
 	must(t, r.paused(100), "a within-budget causal group must be paused")
 	r.comp = 980
 	r.run(150, 2*time.Second, crit) // every kill path is reachable
-	must(t, r.w.count(syscall.SIGTERM) == 0 && r.w.count(syscall.SIGKILL) == 0, "a within-budget group is never killed")
+	must(t, r.w.count(sigTERM) == 0 && r.w.count(sigKILL) == 0, "a within-budget group is never killed")
 
 	// With an undeclared causal group present it is paused first, even when
 	// the within-budget group is larger.
@@ -380,7 +378,7 @@ func TestPidReuseIsNeverSignalled(t *testing.T) {
 	sig := r.det.Observe(sys, false, []dgs{{PGID: 100, Series: series}})
 	acts := r.m.Step(Snapshot{At: r.at, Sys: sys, Signals: sig, Terms: []Term{{Key: key, Group: g, Series: series}}, ScanAt: r.at, ScanOK: true})
 	r.ex.Apply(acts)
-	must(t, !contains(r.w.sigs(syscall.SIGSTOP), 101), "a reused pid must never be stopped: %v", r.w.log)
+	must(t, !contains(r.w.sigs(sigSTOP), 101), "a reused pid must never be stopped: %v", r.w.log)
 	must(t, !r.w.procs[101].stopped, "the unrelated process must keep running")
 
 	// Stage 2: pause to resume.
@@ -389,7 +387,7 @@ func TestPidReuseIsNeverSignalled(t *testing.T) {
 	r2.m.SetMode(ModeAlert)
 	r2.poll(2*time.Second, warn)
 	must(t, r2.w.procs[101].stopped, "resume must not CONT a reused pid (the stranger stays as it was)")
-	must(t, !contains(r2.w.sigs(syscall.SIGCONT), 101), "SIGCONT sent to a reused pid")
+	must(t, !contains(r2.w.sigs(sigCONT), 101), "SIGCONT sent to a reused pid")
 
 	// Stage 3: SIGTERM to SIGKILL.
 	r3 := killRig(t, ModePauseKill)
@@ -398,7 +396,7 @@ func TestPidReuseIsNeverSignalled(t *testing.T) {
 	r3.w.procs[101] = &proc{pid: 101, ppid: 1, pgid: 777, start: r3.at} // the survivor died and its pid was reused
 	r3.run(4, 2*time.Second, crit)
 	must(t, !r3.w.procs[101].dead, "SIGKILL must not hit a reused pid")
-	must(t, !contains(r3.w.sigs(syscall.SIGKILL), 101), "SIGKILL sent to a reused pid")
+	must(t, !contains(r3.w.sigs(sigKILL), 101), "SIGKILL sent to a reused pid")
 }
 
 // Code-inspection F2: a recorded member that is excluded now (it exec'd a
@@ -423,7 +421,7 @@ func TestNoKillNeverKillsInPauseKillMode(t *testing.T) {
 	r.m.cfg.NoKill = true
 	r.run(80, 2*time.Second, crit)
 	_, termed := r.termAt()
-	must(t, !termed && r.w.count(syscall.SIGTERM) == 0 && r.w.count(syscall.SIGKILL) == 0, "NoKill must never kill")
+	must(t, !termed && r.w.count(sigTERM) == 0 && r.w.count(sigKILL) == 0, "NoKill must never kill")
 	must(t, r.paused(100), "the group stays paused")
 }
 

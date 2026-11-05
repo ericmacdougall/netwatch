@@ -1,9 +1,6 @@
-//go:build !windows
-
 package guard
 
 import (
-	"syscall"
 	"testing"
 	"time"
 )
@@ -98,7 +95,7 @@ func TestIncidentShapedSeriesPausesAndKillsOnEachPath(t *testing.T) {
 	// Control: with the tracker disabled (no group seen) nothing is paused.
 	c := incidentRig(t, false, nil)
 	_, ok := c.first(ActPause, 0)
-	must(t, !ok && c.w.count(syscall.SIGSTOP) == 0, "without the tracker there is no pause")
+	must(t, !ok && c.w.count(sigSTOP) == 0, "without the tracker there is no pause")
 	_, ok = c.first(ActTerm, 0)
 	must(t, !ok, "without the tracker there is no kill")
 }

@@ -1,5 +1,3 @@
-//go:build !windows
-
 package resmon
 
 import (
@@ -156,9 +154,9 @@ func (s sigFunc) Signal(pid int, start time.Time, sg syscall.Signal) error {
 	}
 	*s.log = append(*s.log, sig{pid, sg})
 	switch sg {
-	case syscall.SIGSTOP:
+	case guard.SigSTOP:
 		p.Stopped = true
-	case syscall.SIGCONT:
+	case guard.SigCONT:
 		p.Stopped = false
 	}
 	return nil
@@ -250,7 +248,7 @@ func (h *harness) run(d time.Duration) {
 
 func (h *harness) stopped(pid int) bool {
 	for _, s := range h.sigs {
-		if s.pid == pid && s.s == syscall.SIGSTOP {
+		if s.pid == pid && s.s == guard.SigSTOP {
 			return true
 		}
 	}
@@ -324,7 +322,7 @@ func TestFailedReadsStillReleaseAfterMaxPause(t *testing.T) {
 	h.run(31 * time.Minute)
 	cont := false
 	for _, s := range h.sigs {
-		if s.pid == 100 && s.s == syscall.SIGCONT {
+		if s.pid == 100 && s.s == guard.SigCONT {
 			cont = true
 		}
 	}
@@ -438,7 +436,7 @@ func TestModeOffWhileReadsFailResumesPausedGroup(t *testing.T) {
 	h.run(30 * time.Second)
 	cont := false
 	for _, s := range h.sigs {
-		if s.pid == 100 && s.s == syscall.SIGCONT {
+		if s.pid == 100 && s.s == guard.SigCONT {
 			cont = true
 		}
 	}

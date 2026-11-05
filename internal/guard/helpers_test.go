@@ -1,5 +1,3 @@
-//go:build !windows
-
 package guard
 
 import (
@@ -72,14 +70,14 @@ func (w *world) Signal(pid int, start time.Time, sig syscall.Signal) error {
 	}
 	w.log = append(w.log, sigRec{pid, sig})
 	switch sig {
-	case syscall.SIGSTOP:
+	case sigSTOP:
 		p.stopped = true
-	case syscall.SIGCONT:
+	case sigCONT:
 		p.stopped = false
 		if p.termPending {
 			p.dead = true
 		}
-	case syscall.SIGTERM:
+	case sigTERM:
 		if p.ignoreTerm {
 			break
 		}
@@ -88,7 +86,7 @@ func (w *world) Signal(pid int, start time.Time, sig syscall.Signal) error {
 		} else {
 			p.dead = true
 		}
-	case syscall.SIGKILL:
+	case sigKILL:
 		p.dead = true
 	}
 	return nil

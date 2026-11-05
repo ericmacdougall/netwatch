@@ -1,9 +1,6 @@
-//go:build !windows
-
 package guard
 
 import (
-	"syscall"
 	"testing"
 	"time"
 
@@ -83,7 +80,7 @@ func TestNEG21FlatHighLevelWithoutCausationNeverKills(t *testing.T) {
 	r.run(10, 2*time.Second, crit)
 	must(t, r.paused(100), "setup")
 	r.run(120, 2*time.Second, crit)
-	must(t, r.w.count(syscall.SIGTERM) == 0, "no causation, no kill")
+	must(t, r.w.count(sigTERM) == 0, "no causation, no kill")
 	// Variant: the pause itself makes compressor use rise. Still no kill.
 	v := newRig(t, ModePauseKill)
 	v.setMinShare(0.1)
@@ -92,7 +89,7 @@ func TestNEG21FlatHighLevelWithoutCausationNeverKills(t *testing.T) {
 	v.run(10, 2*time.Second, crit)
 	v.comp = 980
 	v.run(120, 2*time.Second, crit)
-	must(t, v.w.count(syscall.SIGTERM) == 0, "rising level without causation must not kill")
+	must(t, v.w.count(sigTERM) == 0, "rising level without causation must not kill")
 }
 
 func TestFastKillPathAndItsNegatives(t *testing.T) {
@@ -180,7 +177,7 @@ func TestFastKillPathAndItsNegatives(t *testing.T) {
 	}
 	for name, mk := range neg {
 		x := mk()
-		must(t, x.w.count(syscall.SIGTERM) == 0 && x.w.count(syscall.SIGKILL) == 0, "%s: must not kill", name)
+		must(t, x.w.count(sigTERM) == 0 && x.w.count(sigKILL) == 0, "%s: must not kill", name)
 	}
 }
 
@@ -305,7 +302,7 @@ func TestGrewTwoGBAloneAndP1AloneNeverKill(t *testing.T) {
 		r.poll(2*time.Second, crit)
 	}
 	r.run(60, 2*time.Second, crit)
-	must(t, r.w.count(syscall.SIGTERM) == 0 && r.w.count(syscall.SIGKILL) == 0, "NEG-15: never killed")
+	must(t, r.w.count(sigTERM) == 0 && r.w.count(sigKILL) == 0, "NEG-15: never killed")
 	pauses := r.ev.named("GUARD_PAUSE")
 	must(t, len(pauses) == 1, "the job may be paused once, got %d", len(pauses))
 	must(t, containsStr(pauses[0].f["signals"].([]string), "cause=grew>=2GB since danger_since"), "the event must name the signals: %v", pauses[0].f["signals"])
@@ -337,7 +334,7 @@ func TestGrewTwoGBAloneAndP1AloneNeverKill(t *testing.T) {
 		g.poll(2*time.Second, crit)
 	}
 	g.run(60, 2*time.Second, crit)
-	must(t, g.w.count(syscall.SIGTERM) == 0, "NEG-18: the steady job must never be killed")
+	must(t, g.w.count(sigTERM) == 0, "NEG-18: the steady job must never be killed")
 }
 
 func containsStr(s []string, v string) bool {

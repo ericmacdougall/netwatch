@@ -1,5 +1,3 @@
-//go:build !windows
-
 package guard
 
 import (
@@ -114,7 +112,7 @@ type failAfter struct {
 }
 
 func (f *failAfter) Signal(pid int, start time.Time, sig syscall.Signal) error {
-	if sig == syscall.SIGSTOP {
+	if sig == sigSTOP {
 		if f.sent >= f.n {
 			return errors.New("daemon killed")
 		}
@@ -389,7 +387,7 @@ type intentSig struct {
 }
 
 func (s intentSig) Signal(pid int, start time.Time, sig syscall.Signal) error {
-	if sig == syscall.SIGSTOP || sig == syscall.SIGTERM {
+	if sig == sigSTOP || sig == sigTERM {
 		got, err := s.st.Load()
 		if err != nil || len(got.Groups) == 0 {
 			*s.bad = append(*s.bad, pid)
@@ -409,7 +407,7 @@ func TestIntentIsDurableBeforeAnySignal(t *testing.T) {
 		r.poll(2*time.Second, warn)
 	}
 	r.runCrit(70, 2*time.Second)
-	must(t, r.w.count(syscall.SIGSTOP) > 0 && r.w.count(syscall.SIGTERM) > 0, "setup: pause and term happened")
+	must(t, r.w.count(sigSTOP) > 0 && r.w.count(sigTERM) > 0, "setup: pause and term happened")
 	must(t, len(bad) == 0, "signals sent before the intent was saved: %v", bad)
 }
 
@@ -422,7 +420,7 @@ func TestKillInFlightNeverEndsInSIGKILLWhenKillDisabled(t *testing.T) {
 		r.w.procs[101].ignoreTerm = true
 		r.runCrit(60, 2*time.Second)
 		_, ok := r.termAt()
-		must(t, ok && r.w.count(syscall.SIGKILL) == 0, "%s: setup: SIGTERM sent, no SIGKILL yet", name)
+		must(t, ok && r.w.count(sigKILL) == 0, "%s: setup: SIGTERM sent, no SIGKILL yet", name)
 		switch name {
 		case "pause mode":
 			r.restart(ModePause)
@@ -434,18 +432,18 @@ func TestKillInFlightNeverEndsInSIGKILLWhenKillDisabled(t *testing.T) {
 		case "shutdown at once":
 			r.restart(ModePause)
 			r.ex.Shutdown()
-			must(t, r.w.count(syscall.SIGKILL) == 0 && r.noneStopped(), "%s: shutdown must resume, not SIGKILL", name)
+			must(t, r.w.count(sigKILL) == 0 && r.noneStopped(), "%s: shutdown must resume, not SIGKILL", name)
 			continue
 		}
 		r.run(10, 2*time.Second, crit)
 		if name == "control" {
-			must(t, r.w.count(syscall.SIGKILL) > 0, "control: pause+kill finishes the kill")
+			must(t, r.w.count(sigKILL) > 0, "control: pause+kill finishes the kill")
 			continue
 		}
-		must(t, r.w.count(syscall.SIGKILL) == 0, "%s: must never SIGKILL", name)
+		must(t, r.w.count(sigKILL) == 0, "%s: must never SIGKILL", name)
 		must(t, r.rec(100) == nil || r.rec(100).Phase != PhaseTerm, "%s: the terming record must be dropped", name)
 		r.ex.Shutdown()
-		must(t, r.w.count(syscall.SIGKILL) == 0, "%s: shutdown must not SIGKILL", name)
+		must(t, r.w.count(sigKILL) == 0, "%s: shutdown must not SIGKILL", name)
 	}
 }
 
@@ -465,10 +463,10 @@ func TestResumePIDRecoversFromUnusableState(t *testing.T) {
 	must(t, errors.Is(ResumePID(bad, r.w, r.w, 4242, 0), ErrNotStopped), "an unknown pid is refused")
 	must(t, errors.Is(ResumePID(bad, r.w, r.w, 1, 0), ErrRefused), "pid 1 is refused")
 	must(t, errors.Is(ResumePID(r.st, r.w, r.w, 101, 0), ErrInRecord), "a recorded member must be resumed by group")
-	must(t, r.w.count(syscall.SIGCONT) == 0, "nothing signalled by the refusals")
+	must(t, r.w.count(sigCONT) == 0, "nothing signalled by the refusals")
 
 	must(t, ResumePID(bad, r.w, r.w, 101, 0) == nil, "own stopped pid resumes")
-	must(t, r.w.count(syscall.SIGCONT) == 1 && !r.w.procs[101].stopped, "exactly one SIGCONT, to 101")
+	must(t, r.w.count(sigCONT) == 1 && !r.w.procs[101].stopped, "exactly one SIGCONT, to 101")
 	must(t, errors.Is(ResumePID(bad, r.w, r.w, 101, 0), ErrNotStopped), "a running pid is not stopped any more")
 }
 
