@@ -1,6 +1,23 @@
 # netwatch
 
-netwatch is a small background monitor for developer machines. It answers two questions:
+**netwatch is a background monitor for developer machines. It explains slow networks, finds leftover dev processes, and pauses agent jobs that are about to exhaust the host's memory.** It is a single Go binary for macOS, Linux and Windows and runs as a per-user service, with no root or administrator rights.
+
+It is for people who run many local tools at once: dev servers, headless browsers, test runners, and AI coding agents that start shell jobs on their own. Those workloads leave processes behind, saturate the link without anyone noticing, and occasionally allocate tens of gigabytes in seconds. A system monitor shows you a snapshot; netwatch keeps a log you can query afterwards.
+
+What it does:
+
+- Pings the gateway and an internet host every 10 seconds and logs `DEGRADED` with the top talkers (per-process traffic) when latency or loss gets bad.
+- Scans every minute for watched developer processes that lost their parent (`ORPHAN`) or run hot (`RUNAWAY`). It lists them, and never signals one unless you ask with `orphans --kill`.
+- Samples memory pressure, swap and the largest processes, attributes them to an app and, for Claude Code tool calls, to the agent that started them, and joins those samples with macOS jetsam reports after a crash (`netwatch incident`).
+- Pauses (never kills, on macOS) the agent job that is driving the host toward running out of memory; see [Memory guard](#memory-guard).
+
+What is different: it records who caused a problem, not only that there was one. Secrets in command lines are redacted before anything is written. Every destructive action is opt-in and re-verified immediately before it is taken. Nothing leaves the machine.
+
+Further reading: [how it works](docs/architecture.md) and [status and roadmap](docs/status-and-roadmap.md).
+
+## What it watches
+
+netwatch is a small background monitor for developer machines. It answers three questions:
 
 1. **Why is the network bad right now?** Every 10 seconds it pings the gateway and an internet host and records per-process traffic. When latency or loss gets bad it logs a `DEGRADED` event with the top talkers at that moment, so you can see what was saturating the link. It also notes each app that starts moving real traffic for the first time (`NEW_NET_APP`).
 2. **What is still running that should not be?** Every minute it looks for developer processes that were left behind: `node`, `vite`, `esbuild`, `wrangler`/`workerd`, Chrome helpers and headless Chrome, `chromedriver`, Playwright, Puppeteer, Electron, `Xvfb`, `crashpad_handler`, `rclone` and similar. A process is reported as an `ORPHAN` when it has lost the parent that started it and is older than a minimum age. It is reported as a `RUNAWAY` when it stays hot on CPU for several scans or passes a memory ceiling.
@@ -32,11 +49,11 @@ go install github.com/ericmacdougall/netwatch/cmd/netwatch@latest
 ### macOS
 
 ```sh
-curl -LO https://github.com/ericmacdougall/netwatch/releases/download/v0.1.0/netwatch_v0.1.0_darwin_arm64.tar.gz
-curl -LO https://github.com/ericmacdougall/netwatch/releases/download/v0.1.0/SHA256SUMS
+curl -LO https://github.com/ericmacdougall/netwatch/releases/download/v0.1.4/netwatch_v0.1.4_darwin_arm64.tar.gz
+curl -LO https://github.com/ericmacdougall/netwatch/releases/download/v0.1.4/SHA256SUMS
 shasum -a 256 -c SHA256SUMS --ignore-missing
-tar xzf netwatch_v0.1.0_darwin_arm64.tar.gz
-install -m 755 netwatch_v0.1.0_darwin_arm64/netwatch ~/.local/bin/netwatch
+tar xzf netwatch_v0.1.4_darwin_arm64.tar.gz
+install -m 755 netwatch_v0.1.4_darwin_arm64/netwatch ~/.local/bin/netwatch
 ~/.local/bin/netwatch install
 ```
 
@@ -45,8 +62,8 @@ install -m 755 netwatch_v0.1.0_darwin_arm64/netwatch ~/.local/bin/netwatch
 ### Linux
 
 ```sh
-tar xzf netwatch_v0.1.0_linux_amd64.tar.gz
-install -m 755 netwatch_v0.1.0_linux_amd64/netwatch ~/.local/bin/netwatch
+tar xzf netwatch_v0.1.4_linux_amd64.tar.gz
+install -m 755 netwatch_v0.1.4_linux_amd64/netwatch ~/.local/bin/netwatch
 ~/.local/bin/netwatch install
 ```
 
@@ -55,8 +72,8 @@ install -m 755 netwatch_v0.1.0_linux_amd64/netwatch ~/.local/bin/netwatch
 ### Windows
 
 ```powershell
-Expand-Archive netwatch_v0.1.0_windows_amd64.zip -DestinationPath $env:LOCALAPPDATA\netwatch
-& "$env:LOCALAPPDATA\netwatch\netwatch_v0.1.0_windows_amd64\netwatch.exe" install
+Expand-Archive netwatch_v0.1.4_windows_amd64.zip -DestinationPath $env:LOCALAPPDATA\netwatch
+& "$env:LOCALAPPDATA\netwatch\netwatch_v0.1.4_windows_amd64\netwatch.exe" install
 ```
 
 `install` creates a per-user Scheduled Task named `netwatch` that starts at logon with your normal, non-elevated rights, and starts it immediately. If local policy forbids a standard user from creating logon tasks, netwatch falls back to a `HKCU\...\CurrentVersion\Run` entry. Logs go to `%LOCALAPPDATA%\netwatch\logs\`.
