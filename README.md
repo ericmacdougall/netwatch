@@ -17,7 +17,7 @@ Further reading: [how it works](docs/architecture.md) and [status and roadmap](d
 
 ## What it watches
 
-netwatch is a small background monitor for developer machines. It answers three questions:
+It answers three questions:
 
 1. **Why is the network bad right now?** Every 10 seconds it pings the gateway and an internet host and records per-process traffic. When latency or loss gets bad it logs a `DEGRADED` event with the top talkers at that moment, so you can see what was saturating the link. It also notes each app that starts moving real traffic for the first time (`NEW_NET_APP`).
 2. **What is still running that should not be?** Every minute it looks for developer processes that were left behind: `node`, `vite`, `esbuild`, `wrangler`/`workerd`, Chrome helpers and headless Chrome, `chromedriver`, Playwright, Puppeteer, Electron, `Xvfb`, `crashpad_handler`, `rclone` and similar. A process is reported as an `ORPHAN` when it has lost the parent that started it and is older than a minimum age. It is reported as a `RUNAWAY` when it stays hot on CPU for several scans or passes a memory ceiling.
